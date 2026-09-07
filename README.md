@@ -96,11 +96,18 @@ Quant-He
 │   ├── layer5_execution/    # 模拟盘 / QMT
 │   └── layer5_scheduler/    # 调度 / 监控 / 流水线
 ├── scripts/                 # 数据更新 / 回测 / IC评估 / 归因 / 容量 / walk-forward
-├── tests/                   # 19 个测试文件
+├── tests/                   # 19 个测试文件（196 用例，离线可跑，CI 已接入）
 ├── web/                     # FastAPI + Vue3 前端
 ├── deploy/                  # Linux / Windows 部署脚本
-└── docs/DEVLOG.md           # 开发验收日志（含红灯记录）
+├── docs/
+│   ├── DEVLOG.md            # 开发验收日志（含 walk-forward 红灯记录）
+│   └── results/             # ★ 研究成果证据链（HTML报告 + 明细CSV）
+└── .github/workflows/       # CI（compileall + pytest，Python 3.11/3.12 矩阵）
 ```
+
+## 研究文档
+
+完整的证据链在 [`docs/results/`](docs/results/README.md)：五年回测报告、walk-forward 样本外验证、风格归因（α/β 拆分）、容量与拥挤度分析、月度 Rank IC/ICIR 评估，以及全部明细 CSV。
 
 ## 常用命令
 
