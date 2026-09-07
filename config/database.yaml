@@ -1,0 +1,56 @@
+# ============================================================
+# 数据库连接配置
+# 敏感信息一律走环境变量（见 .env），本文件只做引用，不落明文密码
+# 占位符 ${VAR} 由 src/common/config.py 在加载时插值
+# ============================================================
+
+mysql:
+  host: ${DB_HOST}
+  port: ${DB_PORT}
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+  database: ${DB_NAME}
+  charset: utf8mb4
+  collation: utf8mb4_unicode_ci
+  autocommit: false
+
+# 连接池
+pool:
+  pool_size: 10
+  max_overflow: 20
+  pool_recycle: 3600
+  pool_pre_ping: true
+  echo: false
+
+# 环境变量默认值（.env 中未设置时生效）
+# 注意：DB_PASSWORD 故意不设默认值，缺失时启动即报错，避免误连空密码
+defaults:
+  DB_HOST: "127.0.0.1"
+  DB_PORT: "3306"
+  DB_USER: "root"
+  DB_NAME: "quant"
+
+# 批量写入参数
+# 5000+ 只股票全历史日线约千万行，必须分批 executemany
+write:
+  chunk_size: 20000
+  bulk_method: "insert_ignore"   # insert_ignore | upsert | replace
+  retry_on_deadlock: 3
+
+# 读取参数
+read:
+  chunksize: 100000
+
+# 数据质量闸门（入库前校验，P0-2 新增）
+# 写入前对 daily_price / daily_basic / stock_basic 做质量体检，
+# 指标超阈值直接抛错中断入库 —— 脏数据必须进不了库，而不是带病入库后靠下游兜底。
+quality:
+  enabled: true
+  # 价格 <= 0 或 NaN 的行占比上限（daily_price 的 open/high/low/close）
+  max_bad_price_ratio: 0.001        # 0.1%
+  # 复权收盘价 NaN 占比上限（回测直接消费的列，缺失即收益断链）
+  max_close_nan_ratio: 0.001        # 0.1%
+  # is_st / is_suspended 缺失率上限（0/1 标记缺失 = 过滤逻辑静默失效）
+  max_flag_missing_ratio: 0.05      # 5%
+  # 流通市值 <= 0 或 NaN 占比上限（daily_basic，加权直接依赖）
+  max_bad_mv_ratio: 0.001           # 0.1%

@@ -1,0 +1,157 @@
+# ============================================================
+# 因子研究标准化工作流（YAML 驱动）
+# ------------------------------------------------------------
+# 新增一个因子：只需在 factors 下加一段配置，无需改动任何 Python 代码。
+# handler 对应 src/layer3_strategy/factors/registry.py 中注册的计算函数。
+# 若 handler 不存在但提供了 expr，则用表达式引擎在已有列上做四则运算。
+#
+# 每个因子字段：
+#   enabled    是否启用
+#   handler    计算函数名（注册在 registry）
+#   params     传给 handler 的参数
+#   direction  1=值越大越优（正向）；-1=值越小越优（反向因子）
+#   category   price | volume | fundamental，用于分类统计
+#   align      财务类因子的时点对齐方式（见下）
+#
+# 时点对齐铁律（杜绝前视偏差）：
+#   财务数据的 report_date 是报告期，ann_date 是实际公告日。
+#   因子在 T 日只能使用 ann_date <= T 的数据，且默认再延后 1 个交易日
+#   （ann_date 当日盘后才公开，T+1 才能交易）。
+#
+# ============================================================
+# 2026-08-31 修正（此前 sed 批量替换把 direction 全部改成 -1，并复制了
+# 动量的注释 —— 导致估值(EP)、盈利质量(ROE)方向被做反）：
+#   - direction 按各因子自身经济学含义 + IC 实测逐一校正，禁止批量改
+#   - 合成方式由 ic_weight（依赖面板 fwd_ret_ 列，生产里永远不存在 →
+#     静默退回等权的死配置）改为 custom 显式权重（见文件末尾 composite）
+# ============================================================
+
+version: "1.0"
+
+# ---------------- 预处理默认参数（因子可单独覆盖） ----------------
+defaults:
+  winsorize:
+    method: "mad"         # mad=中位数绝对偏差法 | quantile=分位数 | sigma=3sigma | none
+    n: 5.0                # MAD 倍数：超出 median ± n*1.4826*MAD 的值被截断
+  standardize:
+    method: "zscore"      # zscore | rank | minmax
+    clip: 3.0             # 标准化后截断范围
+  neutralize:
+    industry: true        # 行业中性化
+    market_cap: true      # 市值中性化（对流通市值对数做回归取残差）
+    method: "ols"         # ols=截面回归取残差 | demean=组内去均值
+  # 截面最少样本数，低于此值该交易日不计算因子
+  min_cross_section: 30
+
+# 行业分类来源
+industry:
+  source: "sw_l1"         # sw_l1=申万一级 | sina=新浪行业
+  # 行业中性化时，单一行业样本数少于该值则并入 "其他"
+  min_industry_size: 5
+
+# ---------------- 因子定义 ----------------
+factors:
+
+  momentum:
+    name: "动量"
+    enabled: true
+    handler: "momentum"
+    category: "price"
+    # 2026-08-31 归因：等权下动量拖累组合（消融 B 组 -18.8%），权重已置 0。
+    # direction 保持因子本义（+1=涨势延续），禁止按 IC 符号翻方向
+    # （教训：IC -0.011 弱负 ≠ 头部选股无效，端到端回测才是裁判）。
+    direction: 1
+    params:
+      window: 250         # 回溯 250 个交易日（约 1 年）
+      skip: 21            # 跳过最近 21 个交易日，规避短期反转效应
+      price_field: "close"   # 面板已按 qfq 前复权入库，close 即复权价
+    desc: "过去一年收益（剔除最近一月）。A 股 IC 弱负，权重 0 不参与合成"
+
+  reversal:
+    name: "反转"
+    enabled: true
+    handler: "reversal"
+    category: "price"
+    direction: -1         # 过去 20 日涨得多 → 得分低（短期反转效应）
+    params:
+      window: 20
+      price_field: "close"
+    desc: "过去一月收益率反转，A 股短期反转效应显著"
+
+  value:
+    name: "估值"
+    enabled: true
+    handler: "ep_ratio"
+    category: "fundamental"
+    direction: 1          # EP = eps_ttm/close 越高越便宜 → 得分越高（价值方向）
+                          # IC 实测 +0.026（t=13.3 显著为正）
+    params:
+      # EP = 每股收益TTM / 股价。
+      # 因为 净利润/总市值 = (净利润/股本)/(市值/股本) = EPS/股价，分子分母的股本
+      # 会约掉，所以不需要总股本也不需要市值接口 —— 数据源依赖最少，也最不容易错。
+      # 想换成 BP 口径就把 numerator 改成 bps（每股净资产）。
+      numerator: "eps_ttm"
+      denominator: "close"
+    align:
+      field_date: "ann_date"
+      lag_days: 1         # 公告日后延 1 个交易日可用
+      ttm: true           # 使用 TTM 口径
+    desc: "盈利收益率 EP（PE 倒数），低估值因子"
+
+  turnover:
+    name: "换手率"
+    enabled: true
+    handler: "turnover"
+    category: "volume"
+    direction: -1         # 换手率越低越优（低换手异象）
+    params:
+      window: 20
+      # 换手率 = 成交量 / 流通股本；若数据源已提供 turnover_rate 则直接取用
+      field: "turnover_rate"
+      fallback: "volume / float_share"
+    desc: "20 日平均换手率，剔除过度投机标的"
+
+  profitability:
+    name: "盈利质量"
+    enabled: true
+    handler: "roe_ttm"
+    category: "fundamental"
+    direction: 1          # ROE 越高越优（正向）
+                          # 注意：IC 实测 -0.003（t=-1.2 不显著），分层单调 -0.9，
+                          # 该因子在 2019-2023 无选股能力 → custom 权重给 0，不参与合成
+    params:
+      source_field: "roe_ttm"     # 数据层已按「年初至今」口径年化，直接取用
+    align:
+      field_date: "ann_date"
+      lag_days: 1
+      ttm: true
+    desc: "ROE(TTM)，数据层已按 Q1×4 / 半年×2 / Q3×4÷3 / 年报×1 年化"
+
+# ---------------- 因子合成 ----------------
+composite:
+  method: "custom"        # custom=用下面显式权重 | equal_weight | ic_weight（需面板带 fwd_ret_，生产不可用）
+  # 【权重定法 v3：只保留两段区间同向稳定的因子（2026-08-31 15:45）】
+  #   账目：v2(14:39) 给 profitability 0.09 → 样本外 39%→28.3%、回撤 25%→37%。
+  #   教训：profitability 样本内显著正(t=7.6)/样本外弱负 = 两段方向相反的区间噪音，
+  #   按 IC 比例给权是"用噪音当信号"；且该改动未经消融直接上生产，属流程违规。
+  #   现踢出合成（权重 0），依据：两段方向相反的证据，非样本外重新验证。
+  #   保留 3 个两段同向稳定因子（样本内/样本外 IC 均显著同向）：
+  #   turnover 0.112/0.111、reversal 0.077/0.055、value 0.065/0.026
+  #   → 归一化 0.44 / 0.31 / 0.25。注意：本轮剔除用了样本外观察，后续
+  #   任何宣称"干净样本外验证"的数字必须用 walk-forward 框架重跑（见 scripts/walk_forward.py）。
+  weights:
+    turnover: 0.44
+    reversal: 0.31
+    value: 0.25
+    profitability: 0.00
+    momentum: 0.00
+  # 缺失值处理：因子缺失时用截面均值填充（0 分），不删除样本
+  fillna: "zero"            # zero=填 0（即中性） | drop=剔除该股
+  orthogonalize: false
+
+# ---------------- 因子有效性检验 ----------------
+evaluation:
+  ic_method: "spearman"     # spearman=秩相关 | pearson
+  ic_periods: [1, 5, 20]    # 未来 1/5/20 日收益的 IC
+  # IC 衰减、分层回测（分 5 组）等
+  quantile_groups: 5

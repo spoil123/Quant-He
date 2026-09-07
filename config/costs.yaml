@@ -1,0 +1,86 @@
+# ============================================================
+# 交易成本模型（第2层回测引擎使用）
+# 所有费率按 A 股现行规则设定，可在 sensitivity 中做压力测试
+# ============================================================
+
+# ---------- 佣金（券商收取，买卖双向） ----------
+commission:
+  rate: 0.00025           # 万 2.5，双边收取
+  min_fee: 5.0            # 单笔最低 5 元
+  mode: "bilateral"       # bilateral=双向 | buy | sell
+
+# ---------- 印花税（国家税务，仅卖出） ----------
+stamp_tax:
+  rate: 0.0005            # 万 5（2023-08-28 起由千一下调为万五）
+  side: "sell"
+  # 历史分段：回测跨越 2023-08-28 的分界，引擎按日期自动取用
+  historical:
+    - {from: "2008-09-19", to: "2023-08-27", rate: 0.001, side: "sell"}
+    - {from: "2023-08-28", to: "2099-12-31", rate: 0.0005, side: "sell"}
+
+# ---------- 过户费（中国结算，沪深双边） ----------
+transfer_fee:
+  rate: 0.00001           # 成交金额的十万分之一（2022-04-29 起）
+  side: "bilateral"
+
+# ---------- 滑点：基于流动性的动态模型 ----------
+# 核心思想：滑点随「委托额占当日成交额比重」非线性上升
+#   slip_bps = base_bps + impact_coef * sqrt( participation ) * 100
+#   participation = order_value / (daily_amount * participation_cap)
+# 成交额越小的股票，同样的委托额冲击越大 —— 这正是小市值策略的真实成本来源
+slippage:
+  model: "liquidity"      # liquidity=流动性模型 | fixed=固定 bp | volume=成交量模型
+  base_bps: 2.0           # 基础滑点（买卖各半点差成本）
+
+  # ---------- 冲击系数校准沿革 ----------
+  # 原 impact_coef=15 会让几乎所有单顶到 max_bps 上限
+  #   （参与度 0.4%→97bps、4%→302bps、20%→673bps），成本被高估到荒谬。
+  # 2026-08-31 按 A 股经验值反推校准为 1.0（参与度 p=|Δw|×本金/(成交额×cap)）：
+  #   大票(p=0.4%) 8.3bps / 中票(p=4%) 22bps / 小票(p=20%) 47bps —— 符合实盘体感
+  # ========== BEGIN AUTO-CALIB（本块由 calibrate_impact.py --write-back 自动重写，勿手改）==========
+  # 状态：未实证 —— 当前 impact_coef 是经验值反推，不是成交数据回归结果。
+  #   滑点假设对结果影响巨大（消融：固定2bp vs 动态1.0 差 ~15pp 收益），
+  #   一切回测收益必须按敏感区间理解（impact ×0.5~×2）。
+  #   积累【真实成交】后执行：
+  #     python scripts/calibrate_impact.py --regress --write-back
+  #   注意：模拟撮合样本(broker=paper)回归结果不会回写 —— 那是对造数真值的
+  #   估计误差，不含真实市场冲击信息，写进来只是自我循环。
+  # ========== END AUTO-CALIB ==========
+  impact_coef: 1.0        # 冲击系数（状态见上方 AUTO-CALIB 块）
+  participation_cap: 0.10 # 单日最多参与该股成交额的 10%
+  max_bps: 60.0           # 滑点上限，防极端值
+  min_bps: 1.0            # 下限：即使极度流动性充足也有点差
+  # 参考：委托额默认取「组合总市值 × 单票目标权重」
+  # 撮合价格 = 委托价 × (1 ± slip_bps/10000)，买入上滑、卖下滑
+
+# ---------- 成本档位（P0-3：正式绩效一律用保守档） ----------
+# 为什么分档：滑点假设对结果影响巨大（消融实测：固定2bp vs 动态模型差 ~15pp 收益）。
+#   impact_coef 的当前状态见 slippage 段的 AUTO-CALIB 块：
+#     · 未实证（经验值反推）→ 保守档倍率保持 1.5，用来覆盖未实证的风险
+#     · 已实证（真实成交回归）→ 可酌情下调倍率，并在 AUTO-CALIB 块记录依据
+#   正式绩效报告必须用保守档（滑点×1.5）而不是最乐观的 1.0 倍，
+#   避免"回测收益好看但实盘打不到"。
+# 每份 metrics 产物都会标注所用成本档位（见 run_top50_strategy.py）。
+tiers:
+  default: "conservative"     # 正式绩效默认档：保守
+  conservative:
+    slip_multiplier: 1.5      # 滑点按 1.5 倍计入，覆盖冲击系数未实证的误差
+    label: "保守档（滑点×1.5）"
+  optimistic:
+    slip_multiplier: 1.0      # 仅供敏感性对照，不作为正式绩效口径
+    label: "乐观档（滑点×1.0）"
+
+# ---------- 流动性硬约束 ----------
+liquidity:
+  # 单只股票当日买入量不得超过其成交量的该比例，超出部分顺延/放弃
+  max_participation: 0.10
+  # 涨跌停不可成交
+  limit_up_buyable: false
+  limit_down_sellable: false
+  # 停牌不可成交
+  suspended_tradable: false
+
+# ---------- 成本压力测试（参数敏感性用） ----------
+sensitivity:
+  cost_multipliers: [0.5, 1.0, 1.5, 2.0]   # 总成本倍数
+  slippage_bps: [0, 2, 5, 10]              # 固定滑点对照

@@ -1,0 +1,11 @@
+# 第2层（Backtrader 回测引擎）依赖
+#
+# 注意：backtrader 官方最后一次发版是 1.8.12.99（2019 年），源码中使用了
+# Python 3.10 已移除的 collections.Iterable / Mapping / Callable 等别名，
+# 在 Python 3.10+ 上直接 import 会抛 AttributeError。
+# 本项目提供 scripts/patch_backtrader.py 自动打补丁，安装后执行一次即可：
+#     python scripts/patch_backtrader.py
+# 补丁只做一件事：把 collections.Xxx 替换为 collections.abc.Xxx，不改任何逻辑。
+
+backtrader==1.8.12.99
+matplotlib>=3.7.0          # 仅用于自绘绩效图，不调用 cerebro.plot()

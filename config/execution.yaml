@@ -1,0 +1,23 @@
+# ============================================================
+# 第 5 层执行层配置（P1-11 模拟盘闭环）
+# 接 QMT(MiniQMT) 模拟盘，拿真实成交回报回归 impact_coef
+# ============================================================
+
+qmt:
+  # MiniQMT 客户端 userdata_mini 目录（安装后填写）
+  xt_path: ""
+  # 资金账号（模拟盘/仿真账号）
+  account: ""
+  # 会话 id（每个进程唯一，多实例时递增）
+  session_id: 1
+  # xtquant 包路径：留空=从 MiniQMT 环境自动找；
+  # 也可填 xtquant 目录绝对路径（适配器会加入 sys.path）
+  path_xtquant: ""
+
+# 成交回报的最小样本量，低于此值不回归（继续累积）
+impact:
+  min_samples: 30
+  # 参与率公式分母系数（与 costs.yaml slippage.participation_cap 保持一致）
+  participation_cap: 0.10
+  # 回归出的 impact_coef 是否自动回写 costs.yaml（建议人工确认后手动回写）
+  auto_write_back: false

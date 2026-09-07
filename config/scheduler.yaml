@@ -1,0 +1,28 @@
+# ============================================================
+# 第 5 层：调度配置
+# ------------------------------------------------------------
+# 两种使用方式：
+#   1. run_once（推荐）：由外部调度（Windows 任务计划 / cron）定时调用
+#        python scripts/run_daily.py --steps update,strategy,risk,monitor
+#   2. daemon：本进程常驻，按下方 schedule 时间表循环
+#        python scripts/run_daily.py --daemon
+# ============================================================
+
+# 策略回测区间（流水线环节复用）
+strategy_range:
+  start: "2019-01-01"
+  end: "2023-12-31"
+
+# ---------------- 定时任务表（daemon 模式使用） ----------------
+# time: HH:MM（24 小时制）
+# weekday: mon/tue/wed/thu/fri/sat/sun（缺省=每天）
+# steps: 执行环节子集
+schedule:
+  daily_update:
+    time: "18:00"
+    steps: ["update", "strategy", "risk", "monitor"]
+
+  weekly_health:
+    weekday: "fri"
+    time: "18:30"
+    steps: ["monitor", "walk_forward"]   # 每周五巡检 + 因子权重外推验证（P1-5）

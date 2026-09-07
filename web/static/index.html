@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>量化交易系统</title>
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/vendor/echarts.min.js"></script>
+<style>
+:root {
+  --bg: #16181d; --panel: #1d2026; --panel2: #242832; --border: #303540;
+  --text: #e6e8ec; --muted: #9aa3b2; --red: #e24b4a; --green: #27a05b; --blue: #378add; --amber: #d9a13d;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:"Microsoft YaHei","PingFang SC",sans-serif; font-size:13px; }
+.nav { display:flex; gap:6px; padding:12px 20px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg); z-index:10; }
+.nav .brand { font-weight:bold; margin-right:16px; color:var(--blue); }
+.nav a { padding:6px 14px; border-radius:8px; cursor:pointer; color:var(--muted); text-decoration:none; }
+.nav a.on { background:#2a3a55; color:#9dc3f5; }
+.container { padding:16px 20px; max-width:1200px; margin:0 auto; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px; }
+.card { background:var(--panel); border-radius:10px; padding:12px 14px; }
+.card .label { color:var(--muted); font-size:12px; }
+.card .val { font-size:22px; font-weight:bold; margin-top:4px; }
+.panel { background:var(--panel); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+.panel h3 { font-size:14px; margin-bottom:10px; color:#c9d1e0; font-weight:500; }
+.chart { width:100%; height:340px; }
+.chart.sm { height:220px; }
+table { width:100%; border-collapse:collapse; font-size:12.5px; }
+th,td { padding:6px 8px; text-align:right; border-bottom:1px solid var(--border); }
+th:first-child,td:first-child { text-align:left; }
+th { color:var(--muted); font-weight:400; }
+.up { color:var(--red); } .down { color:var(--green); }
+.btn { background:#2a3a55; color:#cfe3ff; border:none; padding:6px 14px; border-radius:8px; cursor:pointer; font-size:12.5px; }
+.btn:disabled { opacity:.5; cursor:wait; }
+input,select { background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:5px 8px; font-size:12.5px; }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.muted { color:var(--muted); } .warn { color:var(--amber); }
+.badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; }
+.badge.red { background:#3a2222; color:#f09595; } .badge.amber { background:#3a3122; color:#efc477; } .badge.green { background:#1f3326; color:#97c459; }
+.tabbar { display:flex; gap:8px; margin-bottom:14px; }
+.tabbar a { padding:5px 12px; border-radius:6px; color:var(--muted); cursor:pointer; font-size:12.5px; }
+.tabbar a.on { background:var(--panel2); color:var(--text); }
+.pulse { animation:blink 1s infinite; }
+@keyframes blink { 50% { opacity:.4; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="nav">
+    <span class="brand">量化终端</span>
+    <a :class="{on:tab==='overview'}" @click="tab='overview'">总览</a>
+    <a :class="{on:tab==='backtest'}" @click="tab='backtest'">回测</a>
+    <a :class="{on:tab==='factors'}" @click="tab='factors'">因子</a>
+    <a :class="{on:tab==='factorconfig'}" @click="tab='factorconfig'">因子配置</a>
+    <a :class="{on:tab==='risk'}" @click="tab='risk'">风控与监控</a>
+    <span style="margin-left:auto; color:var(--muted); font-size:12px;">Top50 五因子 · 本机</span>
+  </div>
+
+  <div class="container">
+    <!-- 总览 -->
+    <div v-if="tab==='overview'">
+      <div class="row" style="margin-bottom:14px;">
+        <span class="muted">回测区间：</span>
+        <button class="btn" :class="{}" @click="loadOverview('latest')">最新</button>
+        <select v-model="ovTag" @change="loadOverview(ovTag)" style="min-width:200px;">
+          <option v-for="t in ovRuns" :value="t">{{t}}</option>
+        </select>
+      </div>
+      <div class="cards">
+        <div class="card" v-for="(v,k) in ovMetrics" :key="k">
+          <div class="label">{{k}}</div>
+          <div class="val" :class="isPct(k)||isLoss(v)?(num(v)<0?'down':'up'):''">{{fmtVal(k,v)}}</div>
+        </div>
+      </div>
+      <div class="panel"><h3>净值曲线（无风控 / 有风控）</h3><div class="chart" ref="ovChart"></div></div>
+    </div>
+
+    <!-- 回测 -->
+    <div v-if="tab==='backtest'">
+      <div class="panel">
+        <h3>历史回测记录</h3>
+        <table>
+          <tr><th>运行</th><th>总收益率</th><th>年化收益率</th><th>夏普</th><th>最大回撤</th></tr>
+          <tr v-for="b in btList" :key="b.tag" @click="loadBacktest(b.tag)" style="cursor:pointer;">
+            <td>{{b.tag}}</td>
+            <td :class="b['总收益率']>0?'up':'down'">{{pct(b['总收益率'])}}</td>
+            <td :class="b['年化收益率']>0?'up':'down'">{{pct(b['年化收益率'])}}</td>
+            <td>{{b['夏普比率']}}</td>
+            <td class="down">{{pct(-b['最大回撤'])}}</td>
+          </tr>
+        </table>
+      </div>
+      <div v-if="btDetail.tag">
+        <div class="cards">
+          <div class="card" v-for="(v,k) in btDetail.metrics" :key="k">
+            <div class="label">{{k}}</div><div class="val" style="font-size:16px;">{{fmtVal(k,v)}}</div>
+          </div>
+        </div>
+        <div class="panel"><h3>净值曲线 · {{btDetail.tag}}</h3><div class="chart" ref="btChart"></div></div>
+        <div class="panel"><h3>调仓记录（前 200 条）</h3>
+          <table><tr><th>日期</th><th>代码</th><th>权重</th></tr>
+          <tr v-for="w in btDetail.weights"><td>{{w.trade_date}}</td><td>{{w.ts_code}}</td><td>{{(w.weight*100).toFixed(2)+'%'}}</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 因子 -->
+    <div v-if="tab==='factors'">
+      <div class="panel"><h3>因子 IC 汇总（未来 20 日 · {{ftag}}）</h3>
+        <table>
+          <tr><th>因子</th><th>IC均值</th><th>IR</th><th>t值</th><th>IC为正比例</th><th>分层单调性</th></tr>
+          <tr v-for="r in icTable"><td>{{r.factor}}</td>
+            <td :class="r['IC均值']>0?'up':'down'">{{r['IC均值']}}</td>
+            <td>{{r.IR}}</td><td>{{r['t值']}}</td>
+            <td>{{(r['IC为正比例']*100).toFixed(0)+'%'}}</td>
+            <td>{{r['分层单调性']}}</td></tr>
+        </table>
+      </div>
+      <div class="panel"><h3>分层收益（Q1-Q5）</h3><div class="chart sm" ref="qrChart"></div></div>
+      <div class="panel"><h3>IC 时间序列（月频）</h3><div class="chart" ref="icChart"></div></div>
+    </div>
+
+    <!-- 因子配置 -->
+    <div v-if="tab==='factorconfig'">
+      <div class="panel">
+        <h3>因子配置 · 修改保存后生效，可一键重跑回测</h3>
+        <div class="muted" style="margin-bottom:10px;">
+          权重 = 样本内(2015-2018) IC 定权基准；改后请点「保存并重跑」。参数改动直接写回 config/factors.yaml（自动备份）。
+        </div>
+        <table>
+          <tr><th>启用</th><th>因子</th><th>方向</th><th>权重(custom)</th><th>handler</th><th>参数</th></tr>
+          <tr v-for="(f,key) in fc.factors">
+            <td><input type="checkbox" v-model="f.enabled"></td>
+            <td>{{f.name}} <span class="muted">({{key}})</span></td>
+            <td>
+              <select v-model="f.direction" style="width:64px;">
+                <option :value="1">正向 +1</option>
+                <option :value="-1">反向 -1</option>
+                <option :value="0">停用 0</option>
+              </select>
+            </td>
+            <td><input type="number" v-model="fcWeight[key]" step="0.01" min="0" style="width:70px;"></td>
+            <td class="muted">{{f.handler}}</td>
+            <td class="muted">{{f.params && Object.keys(f.params).length ? JSON.stringify(f.params) : '-'}}</td>
+          </tr>
+        </table>
+        <div class="row" style="margin:10px 0;">
+          <span class="muted">合成方式：</span>
+          <select v-model="fc.composite.method" style="width:120px;">
+            <option value="custom">custom 权重</option>
+            <option value="equal_weight">等权</option>
+          </select>
+          <span class="muted" style="margin-left:16px;">权重和: {{fcWeightSum().toFixed(2)}}</span>
+          <span v-if="!fcWeightOk()" class="warn" style="margin-left:12px;">⚠ custom 模式权重和必须 > 0</span>
+        </div>
+        <div class="row">
+          <button class="btn" :disabled="running || !fcWeightOk()" @click="saveFactorConfig(false)">保存配置</button>
+          <button class="btn" :disabled="running || !fcWeightOk()" @click="saveFactorConfig(true)">保存并重跑 Top50 {{running?'(运行中)':''}}</button>
+          <span v-if="fcMsg" class="muted" style="margin-left:10px;">{{fcMsg}}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 风控监控 -->
+    <div v-if="tab==='risk'">
+      <div class="panel"><h3>风控前后对比 · {{rtag}}</h3>
+        <table>
+          <tr><th>指标</th><th>无风控</th><th>有风控</th></tr>
+          <tr v-for="r in riskReport"><td>{{r['指标']}}</td>
+            <td>{{fmtCell(r['无风控'])}}</td><td>{{fmtCell(r['有风控'])}}</td></tr>
+        </table>
+      </div>
+      <div class="panel"><h3>净值对比</h3><div class="chart sm" ref="riskChart"></div></div>
+      <div class="row" style="margin-bottom:14px;">
+        <span class="muted">调参重跑：</span>
+        <label>止损 <input type="number" v-model="riskParm.single_stock_drawdown" step="0.01" style="width:70px;"></label>
+        <label>移动止损 <input type="number" v-model="riskParm.trailing_stop" step="0.01" style="width:70px;"></label>
+        <label>熔断回撤 <input type="number" v-model="riskParm.drawdown_trigger" step="0.01" style="width:70px;"></label>
+        <button class="btn" :disabled="running" @click="runRisk">重跑风控 {{running?'(运行中)':''}}</button>
+      </div>
+      <div class="panel"><h3>风控事件（{{riskEvents.length}} 条）</h3>
+        <table>
+          <tr><th>日期</th><th>类型</th><th>代码</th><th>回撤</th></tr>
+          <tr v-for="e in riskEvents.slice(0,100)"><td>{{e.date}}</td>
+            <td><span class="badge" :class="e.type.includes('stop')?'amber':(e.type.includes('off')?'green':'red')">{{e.type}}</span></td>
+            <td>{{e.ts_code||'-'}}</td><td>{{e.dd||'-'}}</td></tr>
+        </table>
+      </div>
+      <div class="panel"><h3>数据健康（实时查询 MySQL）</h3>
+        <table v-if="mon">
+          <tr><td>最近交易日</td><td>{{mon.latest_trade_date}}</td></tr>
+          <tr><td>覆盖率</td><td>{{mon.coverage['已入库']}} / {{mon.coverage['全市场']}} ({{(mon.coverage['覆盖率']*100).toFixed(1)+'%'}})</td></tr>
+          <tr><td>过期股票</td><td class="warn">{{mon.freshness['过期股票数']}} 只</td></tr>
+          <tr><td>数据质量</td><td class="warn">{{mon.quality['问题总数']}} 条</td></tr>
+          <tr v-for="a in mon.alerts"><td class="warn">告警</td><td class="warn">{{a}}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

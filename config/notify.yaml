@@ -1,0 +1,51 @@
+# ============================================================
+# 主动通知配置（P1-5）
+# ------------------------------------------------------------
+# ⚠ 当前状态：enabled=false + 渠道全空 —— 线上出事不会有任何推送，
+#   所有告警只落到 logs/。这是「代码完成、配置未启用」的半成品状态。
+#
+#   配好后务必跑一次实测：
+#       python -m src.common.notify --send
+#   退出码 0 = 通道可用；非 0 = 配置有问题，自检输出会指出缺什么。
+#
+# 三种状态的区别（第二种最危险）：
+#   enabled=false            → 主动关闭，消息进日志，是明确选择
+#   enabled=true + 渠道全空   → 看起来开着告警，实际一条都发不出去
+#   enabled=true + 渠道可用   → 正常，自检通过
+# ============================================================
+
+enabled: false
+
+# ---------- 渠道一：Webhook 机器人（推荐，零依赖） ----------
+# format 决定 payload 结构，各家不一样，选错就是"配了也发不出去"：
+#   wecom    = 企业微信群机器人
+#   dingtalk = 钉钉自定义机器人（安全设置建议选"自定义关键词"，填：告警）
+#   feishu   = 飞书自定义机器人
+#   generic  = 自建服务，收 {"msgtype":"text","text":{"content":"..."}}
+webhook:
+  format: "wecom"
+  url: ""
+  # 企业微信：群设置 → 群机器人 → 添加 → 复制 Webhook 地址
+  #   https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx
+  # 钉钉：群设置 → 机器人 → 自定义 → 复制 Webhook（含 access_token）
+  #   https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx
+  #   安全设置务必选「自定义关键词」，填：告警
+  # 飞书：群设置 → 群机器人 → 添加 → 复制 Webhook 地址
+  #   https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx
+
+# ---------- 渠道二：SMTP 邮件 ----------
+# password 是【授权码 / 应用专用密码】，不是邮箱登录密码：
+#   QQ 邮箱 ：设置 → 账号 → POP3/SMTP 服务 → 开启 → 生成授权码
+#   163 邮箱：设置 → POP3/SMTP/IMAP → 开启 → 设置客户端授权码
+#   Gmail   ：账号 → 安全性 → 两步验证 → 应用专用密码
+smtp:
+  host: ""           # QQ: smtp.qq.com | 163: smtp.163.com | Gmail: smtp.gmail.com
+  port: 465          # 465=SSL（推荐）| 587=STARTTLS
+  user: ""           # 发件邮箱完整地址，例: 123456@qq.com
+  password: ""       # 授权码（不是登录密码）
+  to: []             # 收件人列表，例: ["a@x.com", "b@x.com"]；也支持 "a@x.com,b@x.com"
+
+# ---------- 触发时机（代码已接好，配好渠道即生效） ----------
+#   · 数据健康告警    src/layer5_scheduler/monitor.py  → notify(数据健康告警)
+#   · 流水线失败      src/layer5_scheduler/pipeline.py → notify_on_failure(...)
+#   · 手动自检        python -m src.common.notify --send

@@ -1,0 +1,22 @@
+# 核心
+akshare>=1.18.0
+pandas>=2.0
+numpy>=1.26
+SQLAlchemy>=2.0
+pymysql>=1.1
+python-dotenv>=1.0
+PyYAML>=6.0
+requests>=2.31
+pyarrow>=15.0        # parquet 读写：akshare_client/industry 缓存 + walk_forward 面板缓存
+baostock>=0.9.3      # 财务第二备源：独立于 akshare 生态（日线已有新浪/腾讯双源）
+
+# Web 前端（网页模式 / 桌面 App 共用）
+fastapi>=0.110
+uvicorn>=0.27
+pywebview>=5.0
+
+# 打包（可选，仅打包时需要）
+pyinstaller>=6.0
+
+# 图表（脚本出图）
+matplotlib>=3.8

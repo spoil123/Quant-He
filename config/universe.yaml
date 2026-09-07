@@ -1,0 +1,60 @@
+# ============================================================
+# 股票池与数据范围配置
+# ============================================================
+
+# 历史区间：2015-01-01 至今（双复权）
+history:
+  start_date: "2015-01-01"
+  end_date: null            # null 表示取到今天
+  adjust:                   # 双复权：qfq 用于因子信号，hfq 用于真实收益
+    - "qfq"
+    - "hfq"
+
+# ---------------- 股票池 ----------------
+# 关键：include_delisted 必须为 true，否则产生幸存者偏差
+stock_list:
+  include_delisted: true          # 退市股入池，消除幸存者偏差
+  include_st: true                # ST 股入库但打标，策略层再剔除
+  include_suspended: true         # 停牌日保留，清洗层标记 status
+  include_bj: true                # 北交所
+  include_cyb: true               # 创业板 300xxx
+  include_kcb: true               # 科创板 688xxx（默认纳入，如需剔除改 false）
+
+  # AKShare 取数函数（按顺序尝试，合并去重）
+  sources:
+    - "stock_info_a_code_name"    # 全 A 代码+名称
+    - "stock_info_sh_name_code"   # 沪市
+    - "stock_info_sz_name_code"   # 深市
+    - "stock_info_bj_name_code"   # 京市
+  # 退市股专用接口
+  delisted_sources:
+    - "stock_info_delist"
+  # 补充：暂停上市/风险警示
+  risk_warning_sources:
+    - "stock_zh_a_st_em"
+
+# 代码板块识别（用于分组与过滤）
+boards:
+  sh_main:    {prefix: ["60"],   name: "沪市主板"}
+  sz_main:    {prefix: ["000", "001"], name: "深市主板"}
+  cyb:        {prefix: ["30"],   name: "创业板"}
+  kcb:        {prefix: ["688"],  name: "科创板"}
+  bse:        {prefix: ["43", "83", "87", "92"], name: "北交所"}
+
+# 入库阶段不剔除任何股票，仅在 stock_basic 打标
+# 策略层按需过滤（见 strategy.yaml 的 universe_filter）
+filters:
+  min_list_days: 180              # 上市不满 180 自然日的次新股，策略层剔除
+  exclude_prefixes: []            # 例：填入 "688" 可全局剔除科创板
+
+# ---------------- 基准指数 ----------------
+benchmark:
+  code: "000300"
+  name: "沪深300"
+  source: "index_zh_a_hist"
+  start_date: "2015-01-01"
+
+# ---------------- 交易日历 ----------------
+trade_calendar:
+  source: "tool_trade_date_hist_sina"
+  # 兜底：日线数据自身去重后的并集
