@@ -9,6 +9,11 @@ PyYAML>=6.0
 requests>=2.31
 pyarrow>=15.0        # parquet 读写：akshare_client/industry 缓存 + walk_forward 面板缓存
 baostock>=0.9.3      # 财务第二备源：独立于 akshare 生态（日线已有新浪/腾讯双源）
+loguru>=0.7          # 日志：src/common/logger
+scipy>=1.11          # pandas corr(method='spearman') 懒加载依赖
+statsmodels>=0.14    # scripts/attribution.py 归因分析
+backtrader>=1.9.7    # src/layer2_backtest/commission.py 冲击成本模型
+# 注：xtquant（QMT 实盘接口）为券商本地库，PyPI 无 distribution，不列入；qmt_broker.py 内已懒加载
 
 # Web 前端（网页模式 / 桌面 App 共用）
 fastapi>=0.110
