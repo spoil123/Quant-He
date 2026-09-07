@@ -2,7 +2,7 @@
 
 **A股五层多因子量化交易系统** —— 从数据获取到模拟交易的完整闭环，含因子挖掘、组合回测、样本外验证、风格归因、容量分析与 Web 桌面端。
 
-![Python](https://img.shields.io/badge/Python-3.13-blue) ![MySQL](https://img.shields.io/badge/MySQL-8.0-orange) ![License](https://img.shields.io/badge/License-MIT-green) ![Status](https://img.shields.io/badge/status-v1.0_完成-brightgreen)
+![CI](https://github.com/spoil123/Quant-He/actions/workflows/ci.yml/badge.svg) ![Python](https://img.shields.io/badge/Python-3.13-blue) ![MySQL](https://img.shields.io/badge/MySQL-8.0-orange) ![License](https://img.shields.io/badge/License-MIT-green) ![Status](https://img.shields.io/badge/status-v1.0_完成-brightgreen)
 
 ---
 

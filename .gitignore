@@ -26,4 +26,3 @@ dist/
 temp/
 .pytest_cache/
 *.pkl
-.github/
