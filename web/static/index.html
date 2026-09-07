@@ -53,6 +53,7 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
     <a :class="{on:tab==='backtest'}" @click="tab='backtest'">回测</a>
     <a :class="{on:tab==='factors'}" @click="tab='factors'">因子</a>
     <a :class="{on:tab==='factorconfig'}" @click="tab='factorconfig'">因子配置</a>
+    <a :class="{on:tab==='combo'}" @click="tab='combo'">组合回测</a>
     <a :class="{on:tab==='risk'}" @click="tab='risk'">风控与监控</a>
     <span style="margin-left:auto; color:var(--muted); font-size:12px;">Top50 五因子 · 本机</span>
   </div>
@@ -73,7 +74,7 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
           <div class="val" :class="isPct(k)||isLoss(v)?(num(v)<0?'down':'up'):''">{{fmtVal(k,v)}}</div>
         </div>
       </div>
-      <div class="panel"><h3>净值曲线（无风控 / 有风控）</h3><div class="chart" ref="ovChart"></div></div>
+      <div class="panel"><h3>净值曲线（无风控 / 有风控）</h3><div class="chart" id="ovChart" ref="ovChart"></div></div>
     </div>
 
     <!-- 回测 -->
@@ -97,7 +98,7 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
             <div class="label">{{k}}</div><div class="val" style="font-size:16px;">{{fmtVal(k,v)}}</div>
           </div>
         </div>
-        <div class="panel"><h3>净值曲线 · {{btDetail.tag}}</h3><div class="chart" ref="btChart"></div></div>
+        <div class="panel"><h3>净值曲线 · {{btDetail.tag}}</h3><div class="chart" id="btChart" ref="btChart"></div></div>
         <div class="panel"><h3>调仓记录（前 200 条）</h3>
           <table><tr><th>日期</th><th>代码</th><th>权重</th></tr>
           <tr v-for="w in btDetail.weights"><td>{{w.trade_date}}</td><td>{{w.ts_code}}</td><td>{{(w.weight*100).toFixed(2)+'%'}}</td></tr>
@@ -118,8 +119,8 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
             <td>{{r['分层单调性']}}</td></tr>
         </table>
       </div>
-      <div class="panel"><h3>分层收益（Q1-Q5）</h3><div class="chart sm" ref="qrChart"></div></div>
-      <div class="panel"><h3>IC 时间序列（月频）</h3><div class="chart" ref="icChart"></div></div>
+      <div class="panel"><h3>分层收益（Q1-Q5）</h3><div class="chart sm" id="qrChart" ref="qrChart"></div></div>
+      <div class="panel"><h3>IC 时间序列（月频）</h3><div class="chart" id="icChart" ref="icChart"></div></div>
     </div>
 
     <!-- 因子配置 -->
@@ -163,6 +164,77 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
       </div>
     </div>
 
+    <!-- 组合回测 -->
+    <div v-if="tab==='combo'">
+      <div class="panel">
+        <h3>组合因子配置 · 勾选成员 + 调组合权重，一键回测</h3>
+        <div class="muted" style="margin-bottom:10px;">
+          成员来自本地验证过的 5 个达标因子（多头夏普 1.28~1.44）；下方只调<b>组合层</b>权重与持仓参数，
+          成员内部的子权重由因子目录定义。改完点「保存并回测」，面板缓存离线可跑（无需数据库）。
+        </div>
+        <div class="row" style="margin-bottom:10px;" v-if="cb.name !== undefined">
+          <label>组合名称 <input v-model="cb.name" style="width:180px;"></label>
+          <label>合成方式
+            <select v-model="cb.method" style="width:130px;">
+              <option value="custom">custom 权重</option>
+              <option value="equal_weight">等权</option>
+            </select>
+          </label>
+          <label>TopN <input type="number" v-model.number="cb.top_n" min="5" max="300" style="width:70px;"></label>
+          <label>单票上限 <input type="number" v-model.number="cb.max_weight" step="0.01" min="0.005" max="0.5" style="width:70px;"></label>
+          <label>起始 <input type="date" v-model="cbStart" style="width:140px;"></label>
+          <label>结束 <input type="date" v-model="cbEnd" style="width:140px;"></label>
+        </div>
+        <table v-if="cb.members">
+          <tr><th>成员</th><th>组合权重(custom)</th><th>成员子权重</th><th>默认持仓</th><th>说明</th></tr>
+          <tr v-for="f in cb.catalog" :key="f.name">
+            <td><label style="cursor:pointer;"><input type="checkbox" v-model="cbSel[f.name]"> {{f.name}}</label></td>
+            <td><input type="number" v-model="cbWeight[f.name]" step="0.1" min="0" style="width:70px;" :disabled="cb.method==='equal_weight'"></td>
+            <td class="muted" style="max-width:340px;">{{subW(f.sub_weights)}}</td>
+            <td class="muted">Top{{f.topn}} / 上限{{(f.max_weight*100).toFixed(0)}}%</td>
+            <td class="muted">{{f.desc}}</td>
+          </tr>
+        </table>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn" :disabled="cbRunning" @click="saveCombo(false)">保存配置</button>
+          <button class="btn" :disabled="cbRunning || !cbOk()" @click="saveCombo(true)">保存并回测 {{cbRunning?'(回测运行中…)':''}}</button>
+          <span v-if="!cbOk()" class="warn">⚠ 请至少勾选一个成员</span>
+          <span v-if="cbMsg" class="muted" style="margin-left:10px;">{{cbMsg}}</span>
+        </div>
+      </div>
+
+      <div class="panel" v-if="cbRes.metrics">
+        <h3>回测结果 · {{cbRes.tag}}（Top{{cbRes.config && cbRes.config.combo ? cbRes.config.combo.top_n : ''}} 含真实成本）</h3>
+        <div class="cards">
+          <div class="card" v-for="(v,k) in cbRes.metrics" :key="k">
+            <div class="label">{{k}}</div>
+            <div class="val" style="font-size:16px;" :class="isPct(k)||isLoss(v)?(num(v)<0?'down':'up'):''">{{fmtVal(k,v)}}</div>
+          </div>
+        </div>
+        <div class="chart" id="cbChart" ref="cbChart"></div>
+        <div v-if="cbRes.weights && cbRes.weights.length" style="margin-top:10px;">
+          <h3 style="font-size:14px;margin-bottom:8px;color:#c9d1e0;font-weight:500;">调仓记录（前 100 条）</h3>
+          <table><tr><th>日期</th><th>代码</th><th>权重</th></tr>
+          <tr v-for="w in cbRes.weights.slice(0,100)"><td>{{w.trade_date}}</td><td>{{w.ts_code}}</td><td>{{(w.weight*100).toFixed(2)+'%'}}</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" v-if="cbRes.members_ref && cbRes.members_ref.length">
+        <h3>成员单因子参考绩效（{{cbRes.members_ref_tag}} 统一回测）</h3>
+        <table>
+          <tr><th>因子</th><th>结构</th><th>年化收益</th><th>夏普</th><th>最大回撤</th><th>超额年化</th></tr>
+          <tr v-for="r in cbRes.members_ref">
+            <td>{{r['因子']}}</td><td class="muted">{{r['结构']}}</td>
+            <td :class="r['年化收益']>0?'up':'down'">{{pct(r['年化收益'])}}</td>
+            <td>{{r['夏普']}}</td>
+            <td class="down">{{pct(-r['最大回撤'])}}</td>
+            <td :class="r['超额年化']>0?'up':'down'">{{pct(r['超额年化'])}}</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
     <!-- 风控监控 -->
     <div v-if="tab==='risk'">
       <div class="panel"><h3>风控前后对比 · {{rtag}}</h3>
@@ -172,7 +244,7 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
             <td>{{fmtCell(r['无风控'])}}</td><td>{{fmtCell(r['有风控'])}}</td></tr>
         </table>
       </div>
-      <div class="panel"><h3>净值对比</h3><div class="chart sm" ref="riskChart"></div></div>
+      <div class="panel"><h3>净值对比</h3><div class="chart sm" id="riskChart" ref="riskChart"></div></div>
       <div class="row" style="margin-bottom:14px;">
         <span class="muted">调参重跑：</span>
         <label>止损 <input type="number" v-model="riskParm.single_stock_drawdown" step="0.01" style="width:70px;"></label>

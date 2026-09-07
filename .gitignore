@@ -24,6 +24,6 @@ dist/
 
 # 临时与缓存
 temp/
+.github/
 .pytest_cache/
 *.pkl
-.github/

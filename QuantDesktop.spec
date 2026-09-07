@@ -29,6 +29,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='QuantDesktop',
+    icon='D:/量化交易/assets/icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

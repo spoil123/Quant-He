@@ -26,6 +26,7 @@ try:
     from src.common.config import CONFIG_DIR as _CFG_DIR
     CONFIG_DIR = _CFG_DIR
     FACTOR_YAML = CONFIG_DIR / "factors.yaml"
+    COMBO_YAML = CONFIG_DIR / "combo.yaml"
     if getattr(sys, "frozen", False):
         _exe_dir = Path(sys.executable).resolve().parent
         _proj = _exe_dir.parents[1] if len(_exe_dir.parents) > 1 else _exe_dir
@@ -34,13 +35,18 @@ try:
         else:
             OUT = _exe_dir / "outputs"
 except Exception:                                          # noqa: BLE001
-    pass
+    COMBO_YAML = CONFIG_DIR / "combo.yaml"
 
 
 # ================================================================ 产物扫描
 
 def _list_runs(dirname: str, prefix: str) -> list:
-    """列出某目录下 prefix_*.csv 的运行 tag 列表（按时间倒序）。"""
+    """列出某目录下 prefix_*.csv 的运行 tag 列表（按时间倒序）。
+
+    tag 必须以数字开头（%Y%m%d_%H%M）—— 否则 glob 会把同前缀的
+    衍生文件（如 factor_ic_series_*) 也当成一次运行，且字符串排序
+    会把 'series_...' 排到真实 tag 前面，读错文件。
+    """
     d = OUT / dirname
     if not d.exists():
         return []
@@ -48,20 +54,24 @@ def _list_runs(dirname: str, prefix: str) -> list:
     for f in d.glob(f"{prefix}_*.csv"):
         name = f.stem
         tag = name[len(prefix) + 1:] if prefix + "_" in name else ""
-        if tag and not tag.endswith((".png",)):
+        if tag and tag[0].isdigit():
             tags.add(tag)
     return sorted(tags, reverse=True)
 
 
 def _read_csv(path: Path) -> pd.DataFrame | None:
     try:
-        return pd.read_csv(path)
+        df = pd.read_csv(path)
     except Exception:                                   # noqa: BLE001
         return None
+    if df is None or df.empty:
+        return None
+    # NaN → None：JSON 标准不认 NaN，FastAPI 序列化时直接 500
+    return df.astype(object).where(pd.notna(df), None)
 
 
 def _read_metrics(path: Path) -> dict | None:
-    """指标 CSV：指标名作行（index_col=0），数值在第一列。"""
+    """指标 CSV：指标名作行（index_col=0），数值在第一列。数值强转，转不动再当字符串。"""
     try:
         m = pd.read_csv(path, index_col=0)
     except Exception:                                   # noqa: BLE001
@@ -69,8 +79,15 @@ def _read_metrics(path: Path) -> dict | None:
     if m is None or m.empty:
         return None
     row = m.iloc[:, 0]
-    return {str(k): (round(float(v), 4) if isinstance(v, (int, float)) else str(v))
-            for k, v in row.items() if pd.notna(v)}
+    out = {}
+    for k, v in row.items():
+        if pd.isna(v):
+            continue
+        try:
+            out[str(k)] = round(float(v), 4)
+        except (TypeError, ValueError):
+            out[str(k)] = str(v)
+    return out
 
 
 # ================================================================ 总览
@@ -259,6 +276,172 @@ def save_factor_config(payload: dict) -> dict:
         return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
 
     return {"ok": True, "backup": bak.name, "config": factor_config()}
+
+
+# ================================================================ 组合回测（final5 因子目录 + combo.yaml）
+
+def _combo_catalog() -> list:
+    """5 个达标因子目录（name/desc/子权重/默认持仓），来自 backtest_final5.FACTORS。"""
+    try:
+        from scripts.backtest_final5 import FACTORS
+        out = []
+        for f in FACTORS:
+            w = dict(f.get("w", {}) or {})
+            tot = sum(w.values()) or 1.0
+            out.append({
+                "name": f["name"],
+                "desc": f.get("desc", ""),
+                "topn": f.get("topn"),
+                "max_weight": f.get("mw"),
+                "sub_weights": {k: round(v / tot, 3) for k, v in
+                                sorted(w.items(), key=lambda x: -x[1])},
+            })
+        return out
+    except Exception as e:                                # noqa: BLE001
+        return [{"error": f"因子目录加载失败: {type(e).__name__}: {e}"}]
+
+
+def combo_config() -> dict:
+    """当前 combo.yaml + 成员因子目录 + 可选区间。"""
+    if not COMBO_YAML.exists():
+        return {"error": f"配置文件不存在: {COMBO_YAML}"}
+    raw = yaml.safe_load(COMBO_YAML.read_text(encoding="utf-8")) or {}
+    combo = raw.get("combo", {}) or {}
+    period = raw.get("period", {}) or {}
+    members = combo.get("members", {}) or {}
+    return {
+        "name": combo.get("name", ""),
+        "method": combo.get("method", "custom"),
+        "members": {k: float(v) for k, v in members.items()},
+        "top_n": int(combo.get("top_n", 50)),
+        "max_weight": float(combo.get("max_weight", 0.05)),
+        "period": {"start": str(period.get("start", "2021-01-01")),
+                   "end": str(period.get("end", "2025-12-31"))},
+        "catalog": _combo_catalog(),
+        "note": "成员子权重（mom/ep/lvol 等）由因子目录定义，此处只调组合层权重",
+    }
+
+
+def save_combo_config(payload: dict) -> dict:
+    """校验并写回 combo.yaml（备份 + 原子写）。"""
+    if not COMBO_YAML.exists():
+        return {"error": f"配置文件不存在: {COMBO_YAML}"}
+    catalog_names = [f["name"] for f in _combo_catalog() if "name" in f]
+    raw = yaml.safe_load(COMBO_YAML.read_text(encoding="utf-8")) or {}
+    combo = raw.setdefault("combo", {}) or {}
+
+    new_members = payload.get("members")
+    if new_members is not None:
+        if not isinstance(new_members, dict) or not new_members:
+            return {"error": "members 必须是非空对象 {因子名: 权重}"}
+        for k, v in new_members.items():
+            if k not in catalog_names:
+                return {"error": f"未知成员因子: {k}（可选: {catalog_names}）"}
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return {"error": f"成员权重 {k} 必须是数字"}
+            if fv <= 0:
+                return {"error": f"成员权重 {k} 必须 > 0"}
+        combo["members"] = {k: round(float(v), 4) for k, v in new_members.items()}
+
+    if "method" in payload:
+        m = payload["method"]
+        if m not in ("custom", "equal_weight"):
+            return {"error": f"method 必须是 custom/equal_weight, 收到 {m}"}
+        combo["method"] = m
+    if combo.get("method", "custom") == "custom" and combo.get("members"):
+        if sum(float(v) for v in combo["members"].values()) <= 0:
+            return {"error": "custom 模式下成员权重之和必须 > 0"}
+
+    if "top_n" in payload:
+        try:
+            tn = int(payload["top_n"])
+        except (TypeError, ValueError):
+            return {"error": "top_n 必须是整数"}
+        if not 5 <= tn <= 300:
+            return {"error": "top_n 取值范围 5~300"}
+        combo["top_n"] = tn
+    if "max_weight" in payload:
+        try:
+            mw = float(payload["max_weight"])
+        except (TypeError, ValueError):
+            return {"error": "max_weight 必须是数字"}
+        if not 0.005 <= mw <= 0.5:
+            return {"error": "max_weight 取值范围 0.005~0.5"}
+        combo["max_weight"] = round(mw, 4)
+    if "name" in payload and isinstance(payload["name"], str) and payload["name"].strip():
+        combo["name"] = payload["name"].strip()
+
+    period = raw.setdefault("period", {}) or {}
+    for key in ("start", "end"):
+        if key in payload.get("period", {}):
+            try:
+                pd.Timestamp(str(payload["period"][key]))
+            except Exception:                             # noqa: BLE001
+                return {"error": f"period.{key} 不是合法日期"}
+            period[key] = str(payload["period"][key])
+    if "period" in payload and period.get("start") and period.get("end"):
+        if str(period["start"]) >= str(period["end"]):
+            return {"error": "period.start 必须早于 period.end"}
+
+    bak = CONFIG_DIR / f"combo.yaml.bak_{datetime.now():%Y%m%d_%H%M%S}"
+    try:
+        shutil.copy2(COMBO_YAML, bak)
+        COMBO_YAML.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception as e:                                # noqa: BLE001
+        return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
+    return {"ok": True, "backup": bak.name, "config": combo_config()}
+
+
+def _list_combo_tags() -> list:
+    d = OUT / "final5"
+    if not d.exists():
+        return []
+    prefix = "combo_metrics_"
+    tags = {f.stem[len(prefix):] for f in d.glob(prefix + "*.csv") if len(f.stem) > len(prefix)}
+    return sorted(tags, reverse=True)
+
+
+def combo_results() -> dict:
+    """最新一次组合回测的指标/净值/调仓明细 + 成员单因子参考绩效。"""
+    tags = _list_combo_tags()
+    if not tags:
+        return {"error": "尚无组合回测产物，请先在「组合回测」页运行"}
+    tag = tags[0]
+    out = {"tag": tag, "runs": tags}
+    m = _read_metrics(OUT / "final5" / f"combo_metrics_{tag}.csv")
+    if m:
+        out["metrics"] = m
+    cfg_json = OUT / "final5" / f"combo_config_{tag}.json"
+    if cfg_json.exists():
+        try:
+            out["config"] = json.loads(cfg_json.read_text(encoding="utf-8"))
+        except Exception:                                 # noqa: BLE001
+            pass
+    eq = _read_csv(OUT / "final5" / f"combo_equity_{tag}.csv")
+    if eq is not None and not eq.empty:
+        eq["trade_date"] = eq["trade_date"].astype(str)
+        out["equity"] = eq.to_dict("records")
+    w = _read_csv(OUT / "final5" / f"combo_weights_{tag}.csv")
+    if w is not None and not w.empty:
+        w = w.copy()
+        w["trade_date"] = w["trade_date"].astype(str)
+        out["weights"] = w.head(500).to_dict("records")
+
+    # 成员参考：最近一次 final5 统一回测的 5 因子绩效
+    f5 = sorted((OUT / "final5").glob("final5_metrics_*.csv"), reverse=True)
+    if f5:
+        df = _read_csv(f5[0])
+        if df is not None and not df.empty:
+            cols = [c for c in ("因子", "结构", "年化收益", "夏普", "最大回撤", "超额年化")
+                    if c in df.columns]
+            out["members_ref"] = df[cols].to_dict("records")
+            out["members_ref_tag"] = f5[0].stem[len("final5_metrics_"):]
+    return out
 
 
 # ================================================================ 因子

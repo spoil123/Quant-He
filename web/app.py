@@ -57,6 +57,21 @@ def put_factor_config(payload: dict):
     return api.save_factor_config(payload)
 
 
+@app.get("/api/combo-config")
+def get_combo_config():
+    return api.combo_config()
+
+
+@app.put("/api/combo-config")
+def put_combo_config(payload: dict):
+    return api.save_combo_config(payload)
+
+
+@app.get("/api/combo-results")
+def get_combo_results():
+    return api.combo_results()
+
+
 @app.get("/api/risk")
 def get_risk():
     return api.risk()

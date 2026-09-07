@@ -26,7 +26,24 @@ _TASK_MODULES = {
     "backtest": "scripts.run_top50_strategy",
     "risk": "scripts.example_risk",
     "factors": "scripts.factor_evaluation",
+    "combo": "scripts.run_combo_strategy",
 }
+
+
+def _build_argv(task_name: str, params: dict) -> list:
+    """拼脚本 argv。combo 的默认区间来自 combo.yaml（面板缓存范围），
+    老任务的默认区间维持 2019-2023 不变。"""
+    start = params.get("start")
+    end = params.get("end")
+    if task_name == "combo":
+        argv = []
+        if start:
+            argv += ["--start", str(start)]
+        if end:
+            argv += ["--end", str(end)]
+        return argv
+    return ["--start", str(start or "2019-01-01"),
+            "--end", str(end or "2023-12-31")]
 
 
 def _run_inprocess(task_id: str, module_path: str, argv: list) -> None:
@@ -61,8 +78,7 @@ def launch(task_name: str, params: dict) -> str:
         return task_id
 
     _TASKS[task_id] = {"status": "running", "task": task_name}
-    argv = ["--start", str(params.get("start", "2019-01-01")),
-            "--end", str(params.get("end", "2023-12-31"))]
+    argv = _build_argv(task_name, params)
     if task_name == "backtest":
         argv += ["--out", str(params.get("out", "outputs/top50"))]
     elif task_name == "risk":

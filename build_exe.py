@@ -54,6 +54,7 @@ def main() -> None:
         "--distpath", str(dist_tmp),
         "--name", name,
         "--windowed",                       # 无控制台窗口
+        f"--icon={ROOT / 'assets' / 'icon.ico'}",   # 应用图标（资源管理器/任务栏/窗口）
         f"--add-data={ROOT / 'web' / 'static'};web/static",
         f"--add-data={ROOT / 'config'};config",
         f"--add-data={ROOT / 'src'};src",
