@@ -114,6 +114,16 @@ class RiskManager:
             w = w.merge(ind, on=["trade_date", "ts_code"], how="left")
         w["industry"] = w["industry"].fillna("UNKNOWN")
 
+        # 护栏（2026-09-09）：面板行业列缺失/全 UNKNOWN 时（典型：离线缓存未并
+        # 真实行业），行业上限会把全组合当「唯一行业」砍到 25%——曾导致组合
+        # 被动留 75% 现金、年化 21%→5%。数据缺失 = fail-open：跳过行业上限，
+        # 单票上限/现金下限等其余约束照常执行。
+        ind_usable = bool((w["industry"] != "UNKNOWN").mean() > 0.5)
+        if not ind_usable:
+            logger.warning(
+                "行业数据缺失（industry 全为 UNKNOWN）——行业上限约束已跳过，"
+                "请重建面板缓存并入行业映射")
+
         rows: List[pd.DataFrame] = []
         for d, g in w.groupby("trade_date", sort=True):
             g = g.copy()
@@ -122,7 +132,7 @@ class RiskManager:
             # 会把临近上限的行业直接推超，多行业超限时补给到空集甚至振荡
             # （实测双行业都超 25% 时总权重掉到 0.5 不守恒）。正确做法：
             # 补给按「未超限行业的剩余空间」分配，最多补到其上限为止。
-            for _ in range(10):
+            for _ in range(10 if ind_usable else 0):
                 ind_w = g.groupby("industry")["weight"].sum()
                 over_ind = ind_w[ind_w > self.max_industry_weight + 1e-9]
                 if over_ind.empty:
