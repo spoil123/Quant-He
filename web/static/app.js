@@ -248,19 +248,33 @@ const app = createApp({
       setTimeout(() => { facEdit.open = false; }, 500);
     }
 
-    async function deleteFactor() {
-      const key = facEdit.form.key;
+    async function _deleteFactorReq(key) {
       const list = _customList().filter(f => f.key !== key);
-      facEdit.saving = true; facEdit.msg = '删除中…'; facEdit.ok = false;
       const r = await fetch('/api/custom-factors', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ factors: list }),
       }).then(x => x.json()).catch(() => ({ error: '网络错误' }));
-      facEdit.saving = false;
-      if (r.error) { facEdit.msg = r.error; return; }
+      if (r.error) return r.error;
       wbSel[key] = false; delete wbWeight[key];
-      facEdit.open = false;
       await loadWorkbench();
+      return '';
+    }
+
+    async function removeFactor(f) {
+      if (!confirm('确定删除自定义因子「' + f.name + '」（' + f.key + '）？该操作不可恢复。')) return;
+      const err = await _deleteFactorReq(f.key);
+      if (err) alert('删除失败：' + err);
+    }
+
+    async function deleteFactor() {
+      const key = facEdit.form.key;
+      const f = _customList().find(x => x.key === key);
+      if (!confirm('确定删除自定义因子「' + (f ? f.name : key) + '」（' + key + '）？该操作不可恢复。')) return;
+      facEdit.saving = true; facEdit.msg = '删除中…'; facEdit.ok = false;
+      const err = await _deleteFactorReq(key);
+      facEdit.saving = false;
+      if (err) { facEdit.msg = err; return; }
+      facEdit.open = false;
     }
 
     function factorName(key) {
@@ -418,7 +432,7 @@ const app = createApp({
       riskReport, riskEvents, rtag, mon, running, riskParm, num, pct, isPct, isLoss, fmtVal, fmtCell,
       fc, pool, wbSel, wbWeight, wbSelected, wbToggle, wbTouch, wbNormPct, wbEqual,
       factorName, catColor, customCount,
-      facEdit, openFacEditor, saveFactor, deleteFactor,
+      facEdit, openFacEditor, saveFactor, deleteFactor, removeFactor,
       cb, cbSel, cbWeight, cbStart, cbEnd, cbMsg, cbRunning, cbRes,
       cbOk, subW, runWorkbench, runRecipe, loadOverview, loadBacktest, runRisk };
   },

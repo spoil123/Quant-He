@@ -216,6 +216,7 @@ input:focus,select:focus { outline:none; border-color:var(--accent); }
           <div class="fcard" v-for="f in pool" :key="f.key" :class="{sel:wbSel[f.key]}" @click="wbToggle(f.key)">
             <div class="f-name">{{f.name}}<span class="f-key">{{f.key}}</span>
               <span v-if="f.custom" class="badge cat-quality" style="margin-left:6px;" @click.stop="openFacEditor(f)">编辑</span>
+              <span v-if="f.custom" class="badge" style="margin-left:4px;background:#7f1d1d;color:#fca5a5;" @click.stop="removeFactor(f)">删除</span>
             </div>
             <div class="f-desc">{{f.custom ? f.expr : f.desc}}</div>
             <div class="f-meta">
@@ -445,7 +446,7 @@ input:focus,select:focus { outline:none; border-color:var(--accent); }
           <b>变量</b><span class="chip" v-for="(v,k) in facEdit.vars" :key="'v'+k" @click="facEdit.form.expr += ' ' + k" :title="v">{{k}}</span>
           <br><b>函数</b><span class="chip" v-for="(v,k) in facEdit.funcs" :key="'f'+k" @click="facEdit.form.expr = k + '(' + facEdit.form.expr + ')'" :title="v">{{k}}</span>
           <br>示例：<span class="chip" @click="facEdit.form.expr = 'rank(close / ts_mean(close, 60))'">rank(close / ts_mean(close, 60))</span>
-          <span class="chip" @click="facEdit.form.expr = 'rank(_ep + _dy)'">rank(_ep + _dy)</span>
+          <span class="chip" @click="facEdit.form.expr = 'rank(_ep + _bm)'">rank(_ep + _bm)</span>
           <span class="chip" @click="facEdit.form.expr = 'rank(ts_delta(_roe, 60))'">rank(ts_delta(_roe, 60))</span>
         </div>
         <div class="row" style="margin-top:16px;justify-content:flex-end;gap:10px;">
