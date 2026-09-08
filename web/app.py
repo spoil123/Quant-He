@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from web import api, runner
 
-app = FastAPI(title="量化交易系统", version="1.2")
+app = FastAPI(title="量化交易系统", version="1.3")
 
 STATIC = ROOT / "web" / "static"
 
@@ -47,12 +47,12 @@ def get_factors():
     return api.factors()
 
 
+# v1.3 因子工作台：组合配置可写（custom_blend 自定义因子混合 / members 配方模式）
+
+
 @app.get("/api/factor-config")
 def get_factor_config():
     return api.factor_config()
-
-
-# v1.2 因子集锁定：不再提供 PUT /api/factor-config 写入接口
 
 
 @app.get("/api/combo-config")
@@ -60,7 +60,14 @@ def get_combo_config():
     return api.combo_config()
 
 
-# v1.2 组合锁定为 Combo3：不再提供 PUT /api/combo-config 写入接口
+@app.put("/api/combo-config")
+def put_combo_config(payload: dict):
+    return api.save_combo_config(payload)
+
+
+@app.get("/api/factor-pool")
+def get_factor_pool():
+    return api.factor_pool()
 
 
 @app.get("/api/combo-results")

@@ -1,16 +1,18 @@
-/* 量化系统前端逻辑（Vue3 + ECharts） */
-const { createApp, ref, reactive, onMounted, nextTick, watch } = Vue;
+/* Quant·He 因子工作台（Vue3 + ECharts） */
+const { createApp, ref, reactive, computed, onMounted, nextTick, watch } = Vue;
 
 const app = createApp({
   setup() {
     const tab = ref('overview');
+    const titles = { overview: '总览', workbench: '因子工作台', combo: '配方组合',
+                     backtest: '回测记录', factors: '因子检验', risk: '风控与监控' };
+    const pageTitle = computed(() => titles[tab.value] || '');
+
     const ovTag = ref('');
     const ovRuns = ref([]);
     const ovMetrics = ref({});
     const ovEquity = ref([]);
-    const ovPlain = ref([]);
-    const ovRisk = ref([]);
-    const ovCombo = ref({});        // Combo3 配置快照（名称/成员/区间）
+    const ovCombo = ref({});
     const btList = ref([]);
     const btDetail = ref({});
     const icTable = ref([]);
@@ -20,8 +22,6 @@ const app = createApp({
     const riskReport = ref([]);
     const riskEvents = ref([]);
     const rtag = ref('');
-    const riskPlain = ref([]);
-    const riskRisk = ref([]);
     const mon = ref(null);
     const running = ref(false);
     const riskParm = reactive({ single_stock_drawdown: -0.25, trailing_stop: -0.30, drawdown_trigger: -0.12 });
@@ -39,27 +39,41 @@ const app = createApp({
 
     function chart(id, option) {
       const el = document.getElementById(id);
-      if (!el) return;                       // 标签未挂载时跳过，切过去时由 watch 重绘
+      if (!el) return;
       if (!charts[id] || charts[id].isDisposed()) charts[id] = echarts.init(el);
       charts[id].setOption(option, true);
       charts[id].resize();
     }
+    const axisStyle = { axisLabel: { color: '#8b96a8' }, splitLine: { lineStyle: { color: '#1a2230' } } };
+    const tooltipStyle = { backgroundColor: '#151b26', borderColor: '#2c3949',
+                           textStyle: { color: '#e8ecf2', fontSize: 12 } };
+    function lineOption(x, series) {
+      return { tooltip: { trigger: 'axis', ...tooltipStyle },
+               legend: series.length > 1 ? { textStyle: { color: '#8b96a8' } } : undefined,
+               grid: { left: 56, right: 20, top: 30, bottom: 32 },
+               xAxis: { type: 'category', data: x, ...axisStyle },
+               yAxis: { type: 'value', ...axisStyle }, series };
+    }
+    const equitySeries = (name, data, color, width = 2) => ({
+      name, type: 'line', showSymbol: false, data: data.map(r => num(r.equity)),
+      lineStyle: { color, width } });
 
-    // 标签切换后重绘对应图表（启动时隐藏标签里的 div 不存在，图只能在此补画）
     watch(tab, t => {
       nextTick(() => {
         if (t === 'overview') loadOverview(ovTag.value || 'latest');
+        else if (t === 'workbench') { if (!pool.value.length) loadWorkbench(); drawCbChart(); }
         else if (t === 'backtest' && btDetail.value.tag) loadBacktest(btDetail.value.tag);
         else if (t === 'factors') loadFactors();
         else if (t === 'risk') loadRisk();
-        else if (t === 'combo') loadComboResults();
+        else if (t === 'combo') { if (cb.name === undefined) loadCombo(); drawRcChart(); }
       });
     });
-    function chartData(records) {
-      const x = records.map(r => r.trade_date || r.date);
-      const y = records.map(r => num(r.equity || r.mean_return || 0));
-      return { x, y };
-    }
+
+    // ---------------- 总览 ----------------
+    const comboMembers = () => {
+      const m = Object.keys(ovCombo.value.members || {});
+      return m.length ? m.map(k => factorName(k)).join(' + ') : '—';
+    };
 
     async function loadOverview(tag) {
       const d = await get('/api/overview');
@@ -69,20 +83,10 @@ const app = createApp({
       ovMetrics.value = d.metrics || {};
       ovEquity.value = d.equity || [];
       ovCombo.value = d.combo || {};
-      ovPlain.value = d.equity_plain || [];
-      ovRisk.value = d.equity_risk || [];
       await nextTick();
-      const series = [{ name: 'Combo3 净值', type: 'line', showSymbol: false, data: ovEquity.value.map(r => num(r.equity)), lineStyle: { color: '#e24b4a', width: 2 } }];
-      if (ovPlain.value.length && ovRisk.value.length) {
-        series.push({ name: '风控前', type: 'line', showSymbol: false, data: ovPlain.value.map(r => num(r.equity)), lineStyle: { color: '#e24b4a', width: 1.5, type: 'dashed' } });
-        series.push({ name: '风控后', type: 'line', showSymbol: false, data: ovRisk.value.map(r => num(r.equity)), lineStyle: { color: '#378add', width: 2 } });
-      }
-      chart('ovChart', {
-        tooltip: { trigger: 'axis' }, legend: { textStyle: { color: '#9aa3b2' } },
-        grid: { left: 50, right: 20, top: 30, bottom: 30 },
-        xAxis: { type: 'category', data: ovEquity.value.map(r => r.trade_date), axisLabel: { color: '#9aa3b2' } },
-        yAxis: { type: 'value', axisLabel: { color: '#9aa3b2' } }, series,
-      });
+      chart('ovChart', lineOption(
+        ovEquity.value.map(r => r.trade_date),
+        [equitySeries((ovCombo.value.name || '组合') + ' 净值', ovEquity.value, '#e2554f')]));
     }
 
     async function loadBacktest(tag) {
@@ -90,15 +94,12 @@ const app = createApp({
       await nextTick();
       if (btDetail.value.equity) {
         const e = btDetail.value.equity;
-        chart('btChart', {
-          tooltip: { trigger: 'axis' }, grid: { left: 50, right: 20, top: 20, bottom: 30 },
-          xAxis: { type: 'category', data: e.map(r => r.trade_date), axisLabel: { color: '#9aa3b2' } },
-          yAxis: { type: 'value', axisLabel: { color: '#9aa3b2' } },
-          series: [{ type: 'line', showSymbol: false, data: e.map(r => num(r.equity)), lineStyle: { color: '#378add', width: 2 } }],
-        });
+        chart('btChart', lineOption(e.map(r => r.trade_date),
+          [equitySeries('净值', e, '#38bdf8')]));
       }
     }
 
+    // ---------------- 因子检验 ----------------
     async function loadFactors() {
       const d = await get('/api/factors');
       if (d.error) return;
@@ -109,23 +110,21 @@ const app = createApp({
       await nextTick();
       if (icSeries.value.length) {
         const keys = Object.keys(icSeries.value[0]).filter(k => k !== Object.keys(icSeries.value[0])[0]);
-        chart('icChart', {
-          tooltip: { trigger: 'axis' }, legend: { textStyle: { color: '#9aa3b2' } },
-          grid: { left: 50, right: 20, top: 30, bottom: 30 },
-          xAxis: { type: 'category', data: icSeries.value.map(r => r[Object.keys(r)[0]]), axisLabel: { color: '#9aa3b2' } },
-          yAxis: { type: 'value', axisLabel: { color: '#9aa3b2' } },
-          series: keys.map(k => ({ name: k, type: 'line', showSymbol: false, data: icSeries.value.map(r => num(r[k])), lineStyle: { width: 1.4 } })),
-        });
+        chart('icChart', lineOption(
+          icSeries.value.map(r => r[Object.keys(r)[0]]),
+          keys.map(k => ({ name: k, type: 'line', showSymbol: false,
+            data: icSeries.value.map(r => num(r[k])), lineStyle: { width: 1.4 } }))));
       }
       if (quantile.value.length) {
         const factors = [...new Set(quantile.value.map(r => r.factor))];
         chart('qrChart', {
-          tooltip: {}, legend: { textStyle: { color: '#9aa3b2' } },
-          grid: { left: 50, right: 20, top: 30, bottom: 30 },
-          xAxis: { type: 'category', data: ['1','2','3','4','5'], axisLabel: { color: '#9aa3b2' } },
-          yAxis: { type: 'value', axisLabel: { color: '#9aa3b2' } },
+          tooltip: { ...tooltipStyle }, legend: { textStyle: { color: '#8b96a8' } },
+          grid: { left: 56, right: 20, top: 30, bottom: 32 },
+          xAxis: { type: 'category', data: ['1', '2', '3', '4', '5'], ...axisStyle },
+          yAxis: { type: 'value', ...axisStyle },
           series: factors.map(f => ({
-            name: f, type: 'bar', data: [1,2,3,4,5].map(g => {
+            name: f, type: 'bar',
+            data: [1, 2, 3, 4, 5].map(g => {
               const r = quantile.value.find(q => q.factor === f && Number(q['组']) === g);
               return r ? num(r['mean_return']) * 100 : null;
             }),
@@ -134,37 +133,23 @@ const app = createApp({
       }
     }
 
+    // ---------------- 风控与监控 ----------------
     async function loadRisk() {
       const d = await get('/api/risk');
       if (d.error) return;
       rtag.value = d.tag || '';
       riskReport.value = d.report || [];
       riskEvents.value = d.events || [];
-      riskPlain.value = d.equity_plain || [];
-      riskRisk.value = d.equity_risk || [];
+      const p = d.equity_plain || [], r = d.equity_risk || [];
       await nextTick();
-      if (riskPlain.value.length && riskRisk.value.length) {
-        chart('riskChart', {
-          tooltip: { trigger: 'axis' }, legend: { textStyle: { color: '#9aa3b2' } },
-          grid: { left: 50, right: 20, top: 30, bottom: 30 },
-          xAxis: { type: 'category', data: riskPlain.value.map(r => r.trade_date), axisLabel: { color: '#9aa3b2' } },
-          yAxis: { type: 'value', axisLabel: { color: '#9aa3b2' } },
-          series: [
-            { name: '无风控', type: 'line', showSymbol: false, data: riskPlain.value.map(r => num(r.equity)), lineStyle: { color: '#e24b4a', width: 1.6 } },
-            { name: '有风控', type: 'line', showSymbol: false, data: riskRisk.value.map(r => num(r.equity)), lineStyle: { color: '#378add', width: 2 } },
-          ],
-        });
+      if (p.length && r.length) {
+        chart('riskChart', lineOption(p.map(x => x.trade_date), [
+          equitySeries('无风控', p, '#e2554f', 1.6),
+          equitySeries('有风控', r, '#38bdf8')]));
       }
     }
 
     async function loadMonitor() { mon.value = await get('/api/monitor'); }
-
-    // ---------------- 因子清单（v1.2 只读：因子集锁定，不可增删） ----------------
-    const fc = ref({});              // 因子配置（GET /api/factor-config）
-
-    async function loadFactorConfig() {
-      fc.value = await get('/api/factor-config') || {};
-    }
 
     async function runRisk() {
       running.value = true;
@@ -182,16 +167,63 @@ const app = createApp({
       }, 3000);
     }
 
-    // ---------------- 组合回测（v1.2 只读：固定 Combo3，仅可重跑） ----------------
-    const cb = reactive({});          // 组合配置（GET /api/combo-config）
+    // ---------------- 因子清单（只读视图，工作台负责编辑） ----------------
+    const fc = ref({});
+
+    async function loadFactorConfig() {
+      fc.value = await get('/api/factor-config') || {};
+    }
+
+    // ---------------- 因子工作台 ----------------
+    const pool = ref([]);              // 12 个基础因子
+    const wbSel = reactive({});        // 是否选中
+    const wbWeight = reactive({});     // 原始权重
+    const wbTouched = reactive({});    // 是否改过权重（未改默认 1.0）
+    const cb = reactive({});           // combo 配置（GET /api/combo-config）
     const cbStart = ref(''); const cbEnd = ref('');
     const cbMsg = ref(''); const cbRunning = ref(false);
     const cbRes = ref({});
+    const cbSel = reactive({});        // 配方模式成员勾选
+    const cbWeight = reactive({});     // 配方模式成员权重
 
+    const wbSelected = computed(() => Object.keys(wbSel).filter(k => wbSel[k]));
     const subW = sw => Object.entries(sw || {}).slice(0, 4)
       .map(([k, v]) => k + ' ' + (v * 100).toFixed(0) + '%').join(' · ') + ' …';
-    const comboMembers = () => Object.keys(ovCombo.value.members || cb.members || {})
-      .join(' + ') || 'MD-Mom50 + DV-LV50 + GM-LV50';
+    function cbOk() { return Object.keys(cbSel).some(k => cbSel[k]); }
+
+    function factorName(key) {
+      const f = pool.value.find(x => x.key === key);
+      if (f) return f.name;
+      const meta = (cb.factor_meta || {})[key];
+      return meta ? meta.name : key;
+    }
+    function catColor(c) {
+      return { 价格: 'blue', 红利: 'amber', 价值: 'teal', 质量: 'green',
+               风险: 'gray', 交易: 'red', 规模: 'blue' }[c] || 'gray';
+    }
+    function wbToggle(key) {
+      wbSel[key] = !wbSel[key];
+      if (wbSel[key] && !(key in wbWeight)) wbWeight[key] = 1.0;
+    }
+    function wbTouch(key) { wbTouched[key] = true; }
+    function wbWeightOf(key) { return wbTouched[key] ? num(wbWeight[key]) : 1.0; }
+    function wbNormPct(key) {
+      const tot = wbSelected.value.reduce((s, k) => s + wbWeightOf(k), 0);
+      return tot > 0 ? (wbWeightOf(key) / tot * 100).toFixed(1) + '%' : '-';
+    }
+    function wbEqual() {
+      for (const k of wbSelected.value) { wbWeight[k] = 1.0; wbTouched[k] = true; }
+    }
+
+    async function loadWorkbench() {
+      const d = await get('/api/factor-pool');
+      pool.value = (d && d.factors) || [];
+      for (const f of pool.value) if (!(f.key in wbSel)) wbSel[f.key] = false;
+      await loadCombo();          // 顺带取 combo.yaml（参数区共用）
+      // 预选：当前已是自定义混合则回显；否则不预选
+      const blend = cb.custom_blend || {};
+      for (const k of Object.keys(blend)) { wbSel[k] = true; wbWeight[k] = blend[k]; wbTouched[k] = true; }
+    }
 
     async function loadCombo() {
       let d;
@@ -200,7 +232,78 @@ const app = createApp({
       if (!d || d.error) { cbMsg.value = (d && d.error) || '加载失败'; return; }
       Object.keys(cb).forEach(k => delete cb[k]);
       Object.assign(cb, d);
+      for (const f of d.catalog || []) {
+        cbSel[f.name] = f.name in d.members;
+        cbWeight[f.name] = d.members[f.name] ?? 1.0;
+      }
       cbStart.value = d.period.start; cbEnd.value = d.period.end;
+    }
+
+    async function saveComboConfig(payload) {
+      const r = await fetch('/api/combo-config', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(x => x.json());
+      if (r.error) { cbMsg.value = '保存失败: ' + r.error; return false; }
+      await loadCombo();
+      return true;
+    }
+
+    function pollComboRun() {
+      return new Promise(resolve => {
+        fetch('/api/run/combo', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        }).then(x => x.json()).then(rr => {
+          const t0 = Date.now();
+          const iv = setInterval(async () => {
+            const s = await get('/api/task/' + rr.task_id);
+            const sec = Math.round((Date.now() - t0) / 1000);
+            cbMsg.value = '回测运行中… ' + sec + 's（走面板缓存，秒级~2分钟）';
+            if (s.status === 'done' || s.status === 'failed' || Date.now() - t0 > 700000) {
+              clearInterval(iv); cbRunning.value = false;
+              cbMsg.value = s.status === 'done'
+                ? '回测完成（' + sec + 's）'
+                : '回测失败: ' + (s.error || '查看 startup.log');
+              await loadComboResults();
+              loadOverview('latest');
+              get('/api/backtests').then(d => { btList.value = d || []; });
+              resolve(s.status === 'done');
+            }
+          }, 2500);
+        });
+      });
+    }
+
+    async function runWorkbench() {
+      if (!wbSelected.value.length) return;
+      cbRunning.value = true; cbMsg.value = '保存配置…';
+      const blend = {};
+      for (const k of wbSelected.value) blend[k] = wbWeightOf(k);
+      const ok = await saveComboConfig({
+        custom_blend: blend,
+        top_n: cb.top_n, max_weight: cb.max_weight,
+        period: { start: cbStart.value, end: cbEnd.value },
+      });
+      if (!ok) return;
+      cbMsg.value = '配置已保存，回测启动…';
+      await pollComboRun();
+    }
+
+    async function runRecipe() {
+      if (!cb.members) return;
+      cbRunning.value = true; cbMsg.value = '保存配置…';
+      const members = {};
+      for (const k in cbSel) if (cbSel[k]) members[k] = num(cbWeight[k]) || 1.0;
+      const ok = await saveComboConfig({
+        name: cb.name, method: cb.method, members,
+        top_n: cb.top_n, max_weight: cb.max_weight,
+        period: { start: cbStart.value, end: cbEnd.value },
+        custom_blend: {},            // 切回配方模式
+      });
+      if (!ok) return;
+      cbMsg.value = '配置已保存，回测启动…';
+      await pollComboRun();
     }
 
     async function loadComboResults() {
@@ -210,60 +313,36 @@ const app = createApp({
       cbRes.value = d || {};
       if (d && d.error) return;
       await nextTick();
-      if (cbRes.value.equity && cbRes.value.equity.length) {
-        const e = cbRes.value.equity;
-        chart('cbChart', {
-          tooltip: { trigger: 'axis' }, grid: { left: 50, right: 20, top: 20, bottom: 30 },
-          xAxis: { type: 'category', data: e.map(r => r.trade_date), axisLabel: { color: '#9aa3b2' } },
-          yAxis: { type: 'value', axisLabel: { color: '#9aa3b2' } },
-          series: [{ type: 'line', showSymbol: false, data: e.map(r => num(r.equity)), lineStyle: { color: '#d9a13d', width: 2 } }],
-        });
-      }
+      drawCbChart(); drawRcChart();
     }
-
-    async function runCombo() {
-      cbRunning.value = true; cbMsg.value = '回测启动…';
-      // 固定配置重跑：不传参，区间/成员全部走锁定的 config/combo.yaml
-      const rr = await fetch('/api/run/combo', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      }).then(x => x.json());
-      const t0 = Date.now();
-      const iv = setInterval(async () => {
-        const s = await get('/api/task/' + rr.task_id);
-        const sec = Math.round((Date.now() - t0) / 1000);
-        cbMsg.value = '回测运行中… ' + sec + 's（首次需加载面板缓存，约 1~2 分钟）';
-        if (s.status === 'done' || s.status === 'failed' || Date.now() - t0 > 700000) {
-          clearInterval(iv); cbRunning.value = false;
-          cbMsg.value = s.status === 'done'
-            ? '回测完成（' + sec + 's），结果已刷新'
-            : '回测失败: ' + (s.error || '超时或查看 startup.log');
-          await loadComboResults();
-          loadOverview('latest');
-          get('/api/backtests').then(d => { btList.value = d || []; });
-        }
-      }, 3000);
+    function drawCbChart() {
+      const e = cbRes.value.equity;
+      if (e && e.length) chart('cbChart', lineOption(e.map(r => r.trade_date),
+        [equitySeries('净值', e, '#2dd4bf')]));
     }
-
+    function drawRcChart() {
+      const e = cbRes.value.equity;
+      if (e && e.length) chart('rcChart', lineOption(e.map(r => r.trade_date),
+        [equitySeries('净值', e, '#d9a13d')]));
+    }
 
     onMounted(() => {
-      // 并行加载、互不阻塞：/api/monitor 要查全库（约 1~2 分钟），
-      // 若 await 串行会把后面的组合页配置一起拖死
       const jobs = [
         loadOverview('latest'),
         get('/api/backtests').then(d => { btList.value = d || []; }),
         loadFactors(), loadRisk(), loadMonitor(), loadFactorConfig(),
-        loadCombo(), loadComboResults(),
+        loadWorkbench(), loadComboResults(),
       ];
       jobs.forEach(p => p && p.catch && p.catch(() => {}));
     });
 
-    return { tab, ovTag, ovRuns, ovMetrics, ovEquity, ovCombo, comboMembers,
+    return { tab, pageTitle, ovTag, ovRuns, ovMetrics, ovEquity, ovCombo, comboMembers,
       btList, btDetail, icTable, icSeries, quantile, ftag,
       riskReport, riskEvents, rtag, mon, running, riskParm, num, pct, isPct, isLoss, fmtVal, fmtCell,
-      fc, loadOverview, loadBacktest, runRisk,
-      cb, cbStart, cbEnd, cbMsg, cbRunning, cbRes,
-      subW, runCombo };
+      fc, pool, wbSel, wbWeight, wbSelected, wbToggle, wbTouch, wbNormPct, wbEqual,
+      factorName, catColor,
+      cb, cbSel, cbWeight, cbStart, cbEnd, cbMsg, cbRunning, cbRes,
+      cbOk, subW, runWorkbench, runRecipe, loadOverview, loadBacktest, runRisk };
   },
 });
 app.mount('#app');

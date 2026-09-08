@@ -128,6 +128,30 @@ def normalize_members(cfg: dict, catalog_names: list) -> tuple[dict, str]:
     return {k: v / tot for k, v in w.items()}, method
 
 
+def load_custom_blend(cfg: dict, comp_cols: dict) -> dict | None:
+    """读取并校验自定义因子混合 combo.custom_blend（非空时优先生效）。
+
+    返回 {基础因子key: 归一化权重}；未启用返回 None。
+    """
+    combo = cfg.get("combo", {}) or {}
+    blend = combo.get("custom_blend") or {}
+    if not isinstance(blend, dict) or not blend:
+        return None
+    w = {}
+    for k, v in blend.items():
+        if k not in comp_cols:
+            raise ValueError(f"custom_blend 未知基础因子: {k}（可用: {sorted(comp_cols)}）")
+        try:
+            fv = float(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"custom_blend 权重 {k} 不是数字: {v!r}") from e
+        if fv <= 0:
+            raise ValueError(f"custom_blend 权重 {k} 必须 > 0（不参与就删掉该项）")
+        w[k] = fv
+    tot = sum(w.values())
+    return {k: v / tot for k, v in w.items()}
+
+
 def load_panel(start: str, end: str, fmod) -> pd.DataFrame:
     """优先面板缓存（区间内），否则回源 MySQL 现建。"""
     in_cache = (start >= CACHE_RANGE[0] and end <= CACHE_RANGE[1])
@@ -180,33 +204,49 @@ def main() -> None:
     fmod = _import_factors_module()
     _resolve_frozen_out_dir()
     catalog = {f["name"]: f for f in fmod.FACTORS}
-    wnorm, method = normalize_members(cfg, sorted(catalog))
 
-    logger.info("===== 组合因子回测 =====  区间 {} ~ {}  组合: {} ({})".format(
-        start, end, combo.get("name", "?"), method))
-    for k, v in sorted(wnorm.items(), key=lambda x: -x[1]):
-        sub = catalog[k]["w"]
-        stot = sum(sub.values())
-        desc = " ".join(f"{sk}:{sv/stot:.0%}" for sk, sv in
-                        sorted(sub.items(), key=lambda x: -x[1]))
-        logger.info(f"  成员 {k} 组合权重 {v:.0%} | Top{catalog[k]['topn']} | 子权重 {desc}")
+    # 自定义因子混合优先；否则走 preset 配方成员模式
+    blend = load_custom_blend(cfg, fmod.COMP_COLS)
+    if blend:
+        wnorm = {"CUSTOM-BLEND": 1.0}
+        method = "custom_blend"
+        logger.info("===== 组合因子回测 =====  区间 {} ~ {}  模式: 自定义因子混合".format(start, end))
+        for k, v in sorted(blend.items(), key=lambda x: -x[1]):
+            logger.info(f"  基础因子 {k:<6s} 权重 {v:.1%}")
+    else:
+        wnorm, method = normalize_members(cfg, sorted(catalog))
+        logger.info("===== 组合因子回测 =====  区间 {} ~ {}  组合: {} ({})".format(
+            start, end, combo.get("name", "?"), method))
+        for k, v in sorted(wnorm.items(), key=lambda x: -x[1]):
+            sub = catalog[k]["w"]
+            stot = sum(sub.values())
+            desc = " ".join(f"{sk}:{sv/stot:.0%}" for sk, sv in
+                            sorted(sub.items(), key=lambda x: -x[1]))
+            logger.info(f"  成员 {k} 组合权重 {v:.0%} | Top{catalog[k]['topn']} | 子权重 {desc}")
 
     panel = load_panel(start, end, fmod)
     if panel.empty:
         logger.error("面板为空，终止")
         sys.exit(1)
 
-    # ---------------- 合成分：Σ 组合权重 × 成员得分 ----------------
+    # ---------------- 合成分 ----------------
     val = pd.Series(0.0, index=panel.index)
-    for name, cw in wnorm.items():
-        sub = catalog[name]["w"]
-        stot = sum(sub.values())
-        mscore = pd.Series(0.0, index=panel.index)
-        for sk, sv in sub.items():
-            col = fmod.COMP_COLS.get(sk)
-            if col and col in panel.columns:
-                mscore += (sv / stot) * panel[col].fillna(0.5)
-        val += cw * mscore
+    if blend:
+        # 自定义模式：直接加权基础因子排名列
+        for k, cw in blend.items():
+            col = fmod.COMP_COLS[k]
+            val += cw * panel[col].fillna(0.5)
+    else:
+        # 配方模式：Σ 组合权重 × 成员得分
+        for name, cw in wnorm.items():
+            sub = catalog[name]["w"]
+            stot = sum(sub.values())
+            mscore = pd.Series(0.0, index=panel.index)
+            for sk, sv in sub.items():
+                col = fmod.COMP_COLS.get(sk)
+                if col and col in panel.columns:
+                    mscore += (sv / stot) * panel[col].fillna(0.5)
+            val += cw * mscore
     panel["_score"] = val
 
     # ---------------- 调仓日 + 回测 ----------------
@@ -246,9 +286,11 @@ def main() -> None:
     snapshot = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "period": {"start": start, "end": end},
+        "mode": method,
         "combo": {"name": combo.get("name"), "method": method,
-                  "members": wnorm, "top_n": top_n, "max_weight": max_w},
-        "member_sub_weights": {k: catalog[k]["w"] for k in wnorm},
+                  "members": (blend if blend else wnorm), "top_n": top_n, "max_weight": max_w},
+        "member_sub_weights": ({"CUSTOM-BLEND": blend} if blend else
+                               {k: catalog[k]["w"] for k in wnorm}),
         "metrics": {k: (float(v) if isinstance(v, (int, float, np.floating)) else str(v))
                     for k, v in metrics.items()},
     }

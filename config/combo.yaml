@@ -8,6 +8,7 @@ combo:
     GM-LV50: 1.0
   top_n: 50
   max_weight: 0.05
+  custom_blend: null
 period:
   start: '2021-01-01'
   end: '2025-12-31'

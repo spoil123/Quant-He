@@ -87,7 +87,7 @@ def main() -> None:
 
         _log("创建原生窗口 (WebView2)...")
         webview.create_window(
-            "量化交易系统 · Combo3 动量红利低波",
+            "Quant·He 因子工作台",
             f"http://{HOST}:{PORT}",
             width=1280, height=820,
             min_size=(1024, 700),

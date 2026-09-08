@@ -296,8 +296,47 @@ def _combo_catalog() -> list:
         return [{"error": f"因子目录加载失败: {type(e).__name__}: {e}"}]
 
 
+# ================================================================ 因子池（基础因子，可自由增减组合）
+
+# 12 个基础因子的元信息（与 backtest_final5.COMP_COLS 对应）
+FACTOR_META = {
+    "mom":   {"name": "动量",       "category": "价格",  "desc": "过去一年收益（剔除近月），捕捉中期趋势"},
+    "rev20": {"name": "短期反转",   "category": "价格",  "desc": "近 20 日收益反转，捕捉超涨超跌回归"},
+    "dy":    {"name": "股息率",     "category": "红利",  "desc": "高股息溢价，红利策略核心"},
+    "bm":    {"name": "账面市值比", "category": "价值",  "desc": "B/M 价值溢价，便宜的好股票"},
+    "ep":    {"name": "盈利收益率", "category": "价值",  "desc": "E/P 价值溢价，估值锚"},
+    "size":  {"name": "市值",       "category": "规模",  "desc": "小市值溢价（A 股长期有效）"},
+    "roe":   {"name": "ROE",        "category": "质量",  "desc": "盈利能力溢价，质量策略核心"},
+    "gm":    {"name": "毛利率",     "category": "质量",  "desc": "毛利率溢价，商业模式优劣代理"},
+    "lev":   {"name": "杠杆",       "category": "风险",  "desc": "低杠杆溢价，财务稳健性"},
+    "lvol":  {"name": "低波动",     "category": "风险",  "desc": "低波动异象，低波动股票长期跑赢"},
+    "tur":   {"name": "换手率",     "category": "交易",  "desc": "低换手溢价，冷门股效应"},
+    "illiq": {"name": "非流动性",   "category": "交易",  "desc": "Amihud 非流动性溢价"},
+}
+
+
+def _factor_usage() -> dict:
+    """各基础因子在 5 个 preset 配方中的合计权重（0~1，作为流行度参考）。"""
+    usage = {}
+    for f in _combo_catalog():
+        if "error" in f:
+            continue
+        for k, v in (f.get("sub_weights") or {}).items():
+            usage[k] = round(usage.get(k, 0.0) + float(v), 3)
+    return usage
+
+
+def factor_pool() -> dict:
+    """基础因子池：12 个因子 + 元信息 + 在 preset 配方中的使用度。"""
+    usage = _factor_usage()
+    out = []
+    for key, meta in FACTOR_META.items():
+        out.append({"key": key, **meta, "recipe_usage": usage.get(key, 0.0)})
+    return {"factors": out, "catalog": _combo_catalog()}
+
+
 def combo_config() -> dict:
-    """当前 combo.yaml + 成员因子目录 + 可选区间。"""
+    """当前 combo.yaml + 成员因子目录 + 自定义混合 + 可选区间。"""
     if not COMBO_YAML.exists():
         return {"error": f"配置文件不存在: {COMBO_YAML}"}
     raw = yaml.safe_load(COMBO_YAML.read_text(encoding="utf-8")) or {}
@@ -308,26 +347,121 @@ def combo_config() -> dict:
         "name": combo.get("name", ""),
         "method": combo.get("method", "custom"),
         "members": {k: float(v) for k, v in members.items()},
+        "custom_blend": {k: float(v) for k, v in (combo.get("custom_blend") or {}).items()},
         "top_n": int(combo.get("top_n", 50)),
         "max_weight": float(combo.get("max_weight", 0.05)),
         "period": {"start": str(period.get("start", "2021-01-01")),
                    "end": str(period.get("end", "2025-12-31"))},
         "catalog": _combo_catalog(),
-        "locked": True,
-        "note": "v1.2 起组合锁定为报告中的最优组合 Combo3 · 动量红利低波，"
-                "成员与权重不可增减修改；「重新回测」按当前固定配置运行",
+        "factor_meta": FACTOR_META,
+        "note": "custom_blend 非空时按自定义基础因子混合回测（成员配方模式被忽略）；"
+                "为空时按 members 配方组合回测",
     }
 
 
 def save_combo_config(payload: dict) -> dict:
-    """v1.2 起组合锁定：不允许增删成员/改权重/改持仓参数。
+    """校验并写回 combo.yaml（备份 + 原子写）。
 
-    Combo3（MD-Mom50 + DV-LV50 + GM-LV50 等权，Top50、单票上限 5%）
-    是报告中交付且经样本外验证的最优组合，界面层任何改动都会造成
-    应用展示与报告数字不可追溯。研究性调整请直接编辑 config/combo.yaml。
+    两种模式（互斥，custom_blend 优先）：
+      - custom_blend: {基础因子key: 权重}  自定义因子混合（因子工作台）
+      - members:      {配方名: 权重}       preset 配方组合
+    另可改 name / top_n / max_weight / period。
     """
-    return {"error": "组合已锁定（v1.2）：成员因子与权重固定为报告中的 Combo3，"
-                     "不允许添加或删减因子。如需研究性调整请直接编辑 config/combo.yaml。"}
+    if not COMBO_YAML.exists():
+        return {"error": f"配置文件不存在: {COMBO_YAML}"}
+    catalog_names = [f["name"] for f in _combo_catalog() if "name" in f]
+    raw = yaml.safe_load(COMBO_YAML.read_text(encoding="utf-8")) or {}
+    combo = raw.setdefault("combo", {}) or {}
+
+    # ---- 自定义因子混合 ----
+    if "custom_blend" in payload:
+        blend = payload.get("custom_blend") or {}
+        if not isinstance(blend, dict):
+            return {"error": "custom_blend 必须是对象 {因子key: 权重}"}
+        if blend:
+            for k, v in blend.items():
+                if k not in FACTOR_META:
+                    return {"error": f"未知基础因子: {k}（可用: {sorted(FACTOR_META)}）"}
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    return {"error": f"权重 {k} 必须是数字"}
+                if fv <= 0:
+                    return {"error": f"权重 {k} 必须 > 0（不参与就删掉该项）"}
+            combo["custom_blend"] = {k: round(float(v), 4) for k, v in blend.items()}
+            combo["name"] = "自定义因子混合"
+        else:
+            combo["custom_blend"] = None    # 置空 → 回到配方模式
+
+    # ---- 配方成员模式 ----
+    new_members = payload.get("members")
+    if new_members is not None:
+        if not isinstance(new_members, dict) or not new_members:
+            return {"error": "members 必须是非空对象 {因子名: 权重}"}
+        for k, v in new_members.items():
+            if k not in catalog_names:
+                return {"error": f"未知成员因子: {k}（可选: {catalog_names}）"}
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return {"error": f"成员权重 {k} 必须是数字"}
+            if fv <= 0:
+                return {"error": f"成员权重 {k} 必须 > 0"}
+        combo["members"] = {k: round(float(v), 4) for k, v in new_members.items()}
+
+    if "method" in payload:
+        m = payload["method"]
+        if m not in ("custom", "equal_weight"):
+            return {"error": f"method 必须是 custom/equal_weight, 收到 {m}"}
+        combo["method"] = m
+    if not combo.get("custom_blend"):
+        if combo.get("method", "custom") == "custom" and combo.get("members"):
+            if sum(float(v) for v in combo["members"].values()) <= 0:
+                return {"error": "custom 模式下成员权重之和必须 > 0"}
+
+    if "top_n" in payload:
+        try:
+            tn = int(payload["top_n"])
+        except (TypeError, ValueError):
+            return {"error": "top_n 必须是整数"}
+        if not 5 <= tn <= 300:
+            return {"error": "top_n 取值范围 5~300"}
+        combo["top_n"] = tn
+    if "max_weight" in payload:
+        try:
+            mw = float(payload["max_weight"])
+        except (TypeError, ValueError):
+            return {"error": "max_weight 必须是数字"}
+        if not 0.005 <= mw <= 0.5:
+            return {"error": "max_weight 取值范围 0.005~0.5"}
+        combo["max_weight"] = round(mw, 4)
+    if "name" in payload and isinstance(payload["name"], str) and payload["name"].strip():
+        combo["name"] = payload["name"].strip()
+
+    period = raw.setdefault("period", {}) or {}
+    for key in ("start", "end"):
+        if key in payload.get("period", {}):
+            try:
+                pd.Timestamp(str(payload["period"][key]))
+            except Exception:                             # noqa: BLE001
+                return {"error": f"period.{key} 不是合法日期"}
+            period[key] = str(payload["period"][key])
+    if "period" in payload and period.get("start") and period.get("end"):
+        if str(period["start"]) >= str(period["end"]):
+            return {"error": "period.start 必须早于 period.end"}
+
+    from datetime import datetime as _dt
+    bak = CONFIG_DIR / f"combo.yaml.bak_{_dt.now():%Y%m%d_%H%M%S}"
+    try:
+        import shutil as _shutil
+        _shutil.copy2(COMBO_YAML, bak)
+        COMBO_YAML.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception as e:                                # noqa: BLE001
+        return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
+    return {"ok": True, "backup": bak.name, "config": combo_config()}
 
 
 def _list_combo_tags() -> list:
