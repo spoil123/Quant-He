@@ -70,6 +70,12 @@ def get_factor_pool():
     return api.factor_pool()
 
 
+@app.post("/api/custom-factors")
+def post_custom_factors(payload: dict):
+    """全量保存用户自定义表达式因子（增/改/删都传整表）。"""
+    return api.save_custom_factors(payload)
+
+
 @app.get("/api/combo-results")
 def get_combo_results():
     return api.combo_results()

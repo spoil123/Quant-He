@@ -11,27 +11,21 @@ import pandas as pd
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "outputs"
+# frozen 下产物根与回测脚本共用 src.common.paths 唯一解析，
+# 避免"脚本写 A 目录、API 读 B 目录"的分裂（v1.3 事故根因）。
+try:
+    from src.common.paths import get_outputs_root as _get_outputs_root
+    OUT = _get_outputs_root()
+except Exception:                                          # noqa: BLE001
+    OUT = ROOT / "outputs"
 CONFIG_DIR = ROOT / "config"
 FACTOR_YAML = CONFIG_DIR / "factors.yaml"
 
-# frozen（PyInstaller）时 __file__ 指向 _MEIPASS 解压目录（只读副本），
-# 配置/产物必须走统一重定向：
-#   - 配置 → exe 同级 config\（可写持久，src.common.config 已处理）
-#   - 产物 → 项目根 outputs\（exe 位于 <项目>/dist/QuantDesktop/，parents[1] 即项目根；
-#             若 exe 脱离项目目录独立分发，退回 exe 同级 outputs\）
 try:
     from src.common.config import CONFIG_DIR as _CFG_DIR
     CONFIG_DIR = _CFG_DIR
     FACTOR_YAML = CONFIG_DIR / "factors.yaml"
     COMBO_YAML = CONFIG_DIR / "combo.yaml"
-    if getattr(sys, "frozen", False):
-        _exe_dir = Path(sys.executable).resolve().parent
-        _proj = _exe_dir.parents[1] if len(_exe_dir.parents) > 1 else _exe_dir
-        if (_proj / "outputs").exists():
-            OUT = _proj / "outputs"
-        else:
-            OUT = _exe_dir / "outputs"
 except Exception:                                          # noqa: BLE001
     COMBO_YAML = CONFIG_DIR / "combo.yaml"
 
@@ -327,12 +321,115 @@ def _factor_usage() -> dict:
 
 
 def factor_pool() -> dict:
-    """基础因子池：12 个因子 + 元信息 + 在 preset 配方中的使用度。"""
+    """因子池：12 个基础因子 + 用户自定义表达式因子 + 元信息 + 配方使用度。"""
     usage = _factor_usage()
     out = []
     for key, meta in FACTOR_META.items():
-        out.append({"key": key, **meta, "recipe_usage": usage.get(key, 0.0)})
-    return {"factors": out, "catalog": _combo_catalog()}
+        out.append({"key": key, **meta, "recipe_usage": usage.get(key, 0.0),
+                    "custom": False})
+    custom = []
+    for f in _custom_factors():
+        custom.append({**f, "category": "自定义", "recipe_usage": 0.0,
+                       "custom": True})
+    return {"factors": out + custom, "catalog": _combo_catalog(),
+            "variables": _expr_variables(), "functions": _expr_functions()}
+
+
+def _custom_factors() -> list:
+    """combo.yaml 里用户自建的表达式因子列表。"""
+    if not COMBO_YAML.exists():
+        return []
+    try:
+        raw = yaml.safe_load(COMBO_YAML.read_text(encoding="utf-8")) or {}
+        lst = ((raw.get("combo", {}) or {}).get("custom_factors")) or []
+        return [f for f in lst if isinstance(f, dict) and f.get("key") and f.get("expr")]
+    except Exception:                                      # noqa: BLE001
+        return []
+
+
+def _expr_variables() -> dict:
+    try:
+        from src.common.factor_expr import VARIABLES
+        return VARIABLES
+    except Exception:                                      # noqa: BLE001
+        return {}
+
+
+def _expr_functions() -> dict:
+    try:
+        from src.common.factor_expr import FUNCTIONS
+        return {k: v[1] for k, v in FUNCTIONS.items()}
+    except Exception:                                      # noqa: BLE001
+        return {}
+
+
+def save_custom_factors(payload: dict) -> dict:
+    """全量保存用户自定义因子（新增/编辑/删除都由前端传整表）。
+
+    payload: {factors: [{key, name, expr, desc}]}
+    每个因子过三关：key 规范 / AST 白名单 / 合成小面板试算。
+    删除的因子若仍被 custom_blend 引用，自动从混合中移除。
+    """
+    if not COMBO_YAML.exists():
+        return {"error": f"配置文件不存在: {COMBO_YAML}"}
+    try:
+        from src.common.factor_expr import (
+            validate_expr, validate_key, smoke_test,
+        )
+    except Exception as e:                                 # noqa: BLE001
+        return {"error": f"表达式引擎加载失败: {e}"}
+
+    factors = payload.get("factors")
+    if not isinstance(factors, list):
+        return {"error": "factors 必须是数组"}
+    if len(factors) > 20:
+        return {"error": "自定义因子最多 20 个"}
+
+    seen = set()
+    clean = []
+    for f in factors:
+        if not isinstance(f, dict):
+            return {"error": "factors 元素必须是对象"}
+        key = str(f.get("key", "")).strip()
+        name = str(f.get("name", "")).strip() or key
+        expr = str(f.get("expr", "")).strip()
+        desc = str(f.get("desc", "")).strip()
+        try:
+            validate_key(key)
+            validate_expr(expr)
+            smoke_test(expr)
+        except ValueError as e:
+            return {"error": f"因子 [{name or key}] 校验未通过: {e}"}
+        if key in seen:
+            return {"error": f"因子 key 重复: {key}"}
+        seen.add(key)
+        clean.append({"key": key, "name": name, "expr": expr, "desc": desc})
+
+    raw = yaml.safe_load(COMBO_YAML.read_text(encoding="utf-8")) or {}
+    combo = raw.setdefault("combo", {}) or {}
+    combo["custom_factors"] = clean
+
+    # 清理 custom_blend 里对已删因子的引用
+    blend = combo.get("custom_blend") or {}
+    if isinstance(blend, dict) and blend:
+        dropped = [k for k in blend if k not in seen and k not in FACTOR_META]
+        if dropped:
+            for k in dropped:
+                blend.pop(k)
+            combo["custom_blend"] = blend or None
+
+    from datetime import datetime as _dt
+    bak = CONFIG_DIR / f"combo.yaml.bak_{_dt.now():%Y%m%d_%H%M%S}"
+    try:
+        import shutil as _shutil
+        _shutil.copy2(COMBO_YAML, bak)
+        COMBO_YAML.write_text(
+            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception as e:                                 # noqa: BLE001
+        return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
+    return {"ok": True, "backup": bak.name, "factors": clean}
 
 
 def combo_config() -> dict:
@@ -348,6 +445,7 @@ def combo_config() -> dict:
         "method": combo.get("method", "custom"),
         "members": {k: float(v) for k, v in members.items()},
         "custom_blend": {k: float(v) for k, v in (combo.get("custom_blend") or {}).items()},
+        "custom_factors": _custom_factors(),
         "top_n": int(combo.get("top_n", 50)),
         "max_weight": float(combo.get("max_weight", 0.05)),
         "period": {"start": str(period.get("start", "2021-01-01")),
@@ -378,10 +476,12 @@ def save_combo_config(payload: dict) -> dict:
         blend = payload.get("custom_blend") or {}
         if not isinstance(blend, dict):
             return {"error": "custom_blend 必须是对象 {因子key: 权重}"}
+        custom_keys = {f.get("key") for f in (combo.get("custom_factors") or [])
+                       if isinstance(f, dict) and f.get("key")}
         if blend:
             for k, v in blend.items():
-                if k not in FACTOR_META:
-                    return {"error": f"未知基础因子: {k}（可用: {sorted(FACTOR_META)}）"}
+                if k not in FACTOR_META and k not in custom_keys:
+                    return {"error": f"未知因子: {k}（可用: {sorted(set(FACTOR_META) | custom_keys)}）"}
                 try:
                     fv = float(v)
                 except (TypeError, ValueError):

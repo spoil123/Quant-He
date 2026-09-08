@@ -191,6 +191,78 @@ const app = createApp({
       .map(([k, v]) => k + ' ' + (v * 100).toFixed(0) + '%').join(' · ') + ' …';
     function cbOk() { return Object.keys(cbSel).some(k => cbSel[k]); }
 
+    // ---------------- 自定义因子（表达式） ----------------
+    const facEdit = reactive({
+      open: false, isNew: true, saving: false, msg: '', ok: false,
+      form: { key: '', name: '', expr: '', desc: '' }, vars: {}, funcs: {},
+    });
+    const customCount = computed(() => pool.value.filter(f => f.custom).length);
+
+    function openFacEditor(f) {
+      facEdit.msg = ''; facEdit.ok = false;
+      facEdit.vars = {};
+      facEdit.funcs = {};
+      if (f) {                       // 编辑
+        facEdit.isNew = false;
+        facEdit.form = { key: f.key, name: f.name, expr: f.expr || '', desc: f.desc || '' };
+      } else {                       // 新建：自动分配不冲突的 key
+        facEdit.isNew = true;
+        let i = 1;
+        const exist = new Set(pool.value.map(x => x.key));
+        while (exist.has('fac' + i)) i += 1;
+        facEdit.form = { key: 'fac' + i, name: '', expr: '', desc: '' };
+      }
+      get('/api/factor-pool').then(d => {
+        if (d && !d.error) { facEdit.vars = d.variables || {}; facEdit.funcs = d.functions || {}; }
+      });
+      facEdit.open = true;
+    }
+
+    function _customList() {
+      return pool.value.filter(f => f.custom)
+        .map(f => ({ key: f.key, name: f.name, expr: f.expr, desc: f.desc || '' }));
+    }
+
+    async function saveFactor() {
+      const fm = facEdit.form;
+      if (!fm.name.trim()) { facEdit.msg = '请填写因子名称'; facEdit.ok = false; return; }
+      if (!fm.expr.trim()) { facEdit.msg = '请填写表达式'; facEdit.ok = false; return; }
+      let list = _customList();
+      if (facEdit.isNew) {
+        list = list.filter(f => f.key !== fm.key.trim());
+        list.push({ key: fm.key.trim(), name: fm.name.trim(),
+                    expr: fm.expr.trim(), desc: fm.desc.trim() });
+      } else {
+        list = list.map(f => f.key === fm.key
+          ? { ...f, name: fm.name.trim(), expr: fm.expr.trim(), desc: fm.desc.trim() } : f);
+      }
+      facEdit.saving = true; facEdit.msg = '试算校验中…'; facEdit.ok = false;
+      const r = await fetch('/api/custom-factors', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ factors: list }),
+      }).then(x => x.json()).catch(() => ({ error: '网络错误' }));
+      facEdit.saving = false;
+      if (r.error) { facEdit.msg = r.error; return; }
+      facEdit.msg = '已保存（备份 ' + r.backup + '）'; facEdit.ok = true;
+      await loadWorkbench();
+      setTimeout(() => { facEdit.open = false; }, 500);
+    }
+
+    async function deleteFactor() {
+      const key = facEdit.form.key;
+      const list = _customList().filter(f => f.key !== key);
+      facEdit.saving = true; facEdit.msg = '删除中…'; facEdit.ok = false;
+      const r = await fetch('/api/custom-factors', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ factors: list }),
+      }).then(x => x.json()).catch(() => ({ error: '网络错误' }));
+      facEdit.saving = false;
+      if (r.error) { facEdit.msg = r.error; return; }
+      wbSel[key] = false; delete wbWeight[key];
+      facEdit.open = false;
+      await loadWorkbench();
+    }
+
     function factorName(key) {
       const f = pool.value.find(x => x.key === key);
       if (f) return f.name;
@@ -199,7 +271,7 @@ const app = createApp({
     }
     function catColor(c) {
       return { 价格: 'blue', 红利: 'amber', 价值: 'teal', 质量: 'green',
-               风险: 'gray', 交易: 'red', 规模: 'blue' }[c] || 'gray';
+               风险: 'gray', 交易: 'red', 规模: 'blue', 自定义: 'teal' }[c] || 'gray';
     }
     function wbToggle(key) {
       wbSel[key] = !wbSel[key];
@@ -262,13 +334,18 @@ const app = createApp({
             cbMsg.value = '回测运行中… ' + sec + 's（走面板缓存，秒级~2分钟）';
             if (s.status === 'done' || s.status === 'failed' || Date.now() - t0 > 700000) {
               clearInterval(iv); cbRunning.value = false;
-              cbMsg.value = s.status === 'done'
-                ? '回测完成（' + sec + 's）'
-                : '回测失败: ' + (s.error || '查看 startup.log');
-              await loadComboResults();
-              loadOverview('latest');
-              get('/api/backtests').then(d => { btList.value = d || []; });
-              resolve(s.status === 'done');
+              if (s.status === 'done') {
+                await loadComboResults();
+                loadOverview('latest');
+                get('/api/backtests').then(d => { btList.value = d || []; });
+                const mode = cbRes.value.config && cbRes.value.config.mode;
+                const modeTxt = mode === 'custom_blend' ? '自定义混合' : '配方组合';
+                cbMsg.value = '回测完成（' + sec + 's）✓ 结果 tag=' + (cbRes.value.tag || '?') + ' · ' + modeTxt;
+                resolve(true);
+              } else {
+                cbMsg.value = '回测失败: ' + (s.error || '查看 startup.log');
+                resolve(false);
+              }
             }
           }, 2500);
         });
@@ -340,7 +417,8 @@ const app = createApp({
       btList, btDetail, icTable, icSeries, quantile, ftag,
       riskReport, riskEvents, rtag, mon, running, riskParm, num, pct, isPct, isLoss, fmtVal, fmtCell,
       fc, pool, wbSel, wbWeight, wbSelected, wbToggle, wbTouch, wbNormPct, wbEqual,
-      factorName, catColor,
+      factorName, catColor, customCount,
+      facEdit, openFacEditor, saveFactor, deleteFactor,
       cb, cbSel, cbWeight, cbStart, cbEnd, cbMsg, cbRunning, cbRes,
       cbOk, subW, runWorkbench, runRecipe, loadOverview, loadBacktest, runRisk };
   },

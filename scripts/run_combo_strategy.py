@@ -39,46 +39,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.common.config import get_config, get_project_root, reload_config  # noqa: E402
+from src.common.config import get_config, reload_config                    # noqa: E402
 from src.common.logger import logger                                       # noqa: E402
+from src.common.paths import get_final5_dir, get_panel_cache               # noqa: E402
 
-OUT_DIR = get_project_root() / "outputs" / "final5"
-PANEL_CACHE = OUT_DIR / "panel_cache_2125.pkl"
+OUT_DIR = get_final5_dir()
+PANEL_CACHE = get_panel_cache()
 CACHE_RANGE = ("2021-01-01", "2025-12-31")   # 缓存面板覆盖区间（超出则回源建面板）
-
-
-def _resolve_frozen_out_dir() -> None:
-    """frozen（PyInstaller）时定位真实 outputs 目录（与 web/api.py 同规则）。
-
-    get_project_root() 在 frozen 下指向 exe 同级目录，面板缓存若随包
-    放在 exe 目录的 outputs/ 里没问题；若 exe 仍在项目 dist/ 里跑
-    （开发场景），缓存实际在项目根 outputs/ —— 逐级向上找一份存在
-    的面板缓存，找到即把 OUT_DIR / PANEL_CACHE 重定向过去。
-    """
-    global OUT_DIR, PANEL_CACHE
-    if PANEL_CACHE.exists():
-        return
-    candidates = []
-    if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        if len(exe_dir.parents) > 1:
-            candidates.append(exe_dir.parents[1] / "outputs" / "final5")  # 项目根
-        candidates.append(exe_dir / "outputs" / "final5")                  # exe 同级
-    else:
-        for p in Path(__file__).resolve().parents:
-            if p.name in ("dist", "build"):
-                continue
-            cand = p / "outputs" / "final5"
-            if cand != OUT_DIR:
-                candidates.append(cand)
-            if len(candidates) >= 3:
-                break
-    for cand in candidates:
-        if (cand / "panel_cache_2125.pkl").exists():
-            OUT_DIR = cand
-            PANEL_CACHE = cand / "panel_cache_2125.pkl"
-            logger.info(f"面板缓存重定向: {PANEL_CACHE}")
-            return
 
 
 def _import_factors_module():
@@ -128,19 +95,22 @@ def normalize_members(cfg: dict, catalog_names: list) -> tuple[dict, str]:
     return {k: v / tot for k, v in w.items()}, method
 
 
-def load_custom_blend(cfg: dict, comp_cols: dict) -> dict | None:
+def load_custom_blend(cfg: dict, comp_cols: dict, extra_keys: set | None = None) -> dict | None:
     """读取并校验自定义因子混合 combo.custom_blend（非空时优先生效）。
 
-    返回 {基础因子key: 归一化权重}；未启用返回 None。
+    key 可以是 12 个基础因子（comp_cols），也可以是 custom_factors 里
+    用户自建的表达式因子（extra_keys）。
+    返回 {key: 归一化权重}；未启用返回 None。
     """
     combo = cfg.get("combo", {}) or {}
     blend = combo.get("custom_blend") or {}
     if not isinstance(blend, dict) or not blend:
         return None
+    allowed = set(comp_cols) | set(extra_keys or ())
     w = {}
     for k, v in blend.items():
-        if k not in comp_cols:
-            raise ValueError(f"custom_blend 未知基础因子: {k}（可用: {sorted(comp_cols)}）")
+        if k not in allowed:
+            raise ValueError(f"custom_blend 未知基础因子: {k}（可用: {sorted(allowed)}）")
         try:
             fv = float(v)
         except (TypeError, ValueError) as e:
@@ -150,6 +120,16 @@ def load_custom_blend(cfg: dict, comp_cols: dict) -> dict | None:
         w[k] = fv
     tot = sum(w.values())
     return {k: v / tot for k, v in w.items()}
+
+
+def load_custom_factors(cfg: dict) -> dict:
+    """combo.custom_factors: [{key,name,expr,desc}] → {key: expr}（仅启用项）。"""
+    lst = (cfg.get("combo", {}) or {}).get("custom_factors") or []
+    out = {}
+    for f in lst:
+        if isinstance(f, dict) and f.get("key") and f.get("expr"):
+            out[str(f["key"])] = str(f["expr"])
+    return out
 
 
 def load_panel(start: str, end: str, fmod) -> pd.DataFrame:
@@ -202,17 +182,19 @@ def main() -> None:
     end = args.end or str(period.get("end", CACHE_RANGE[1]))
 
     fmod = _import_factors_module()
-    _resolve_frozen_out_dir()
     catalog = {f["name"]: f for f in fmod.FACTORS}
 
     # 自定义因子混合优先；否则走 preset 配方成员模式
-    blend = load_custom_blend(cfg, fmod.COMP_COLS)
+    custom_factors = load_custom_factors(cfg)
+    blend = load_custom_blend(cfg, fmod.COMP_COLS, extra_keys=set(custom_factors))
     if blend:
         wnorm = {"CUSTOM-BLEND": 1.0}
         method = "custom_blend"
         logger.info("===== 组合因子回测 =====  区间 {} ~ {}  模式: 自定义因子混合".format(start, end))
         for k, v in sorted(blend.items(), key=lambda x: -x[1]):
-            logger.info(f"  基础因子 {k:<6s} 权重 {v:.1%}")
+            tag_ = "表达式" if k in custom_factors else "基础"
+            logger.info(f"  {tag_}因子 {k:<12s} 权重 {v:.1%}"
+                        + (f"  expr: {custom_factors[k]}" if k in custom_factors else ""))
     else:
         wnorm, method = normalize_members(cfg, sorted(catalog))
         logger.info("===== 组合因子回测 =====  区间 {} ~ {}  组合: {} ({})".format(
@@ -232,10 +214,26 @@ def main() -> None:
     # ---------------- 合成分 ----------------
     val = pd.Series(0.0, index=panel.index)
     if blend:
-        # 自定义模式：直接加权基础因子排名列
+        # 自定义模式：基础因子用排名列，表达式因子现算（截面 [0,1] 同量纲）
         for k, cw in blend.items():
-            col = fmod.COMP_COLS[k]
-            val += cw * panel[col].fillna(0.5)
+            if k in custom_factors:
+                from src.common.factor_expr import eval_factor
+                t_e = time.time()
+                try:
+                    score = eval_factor(panel, custom_factors[k], factor_name=k)
+                except ValueError as e:
+                    logger.error(str(e))
+                    sys.exit(1)
+                if score.isna().all():
+                    logger.error(f"表达式因子 {k} 计算结果全为空，终止"
+                                 f"（请检查表达式引用的变量是否有数据）")
+                    sys.exit(1)
+                logger.info(f"  表达式因子 {k} 计算完成（{time.time()-t_e:.0f}s，"
+                            f"有效值 {score.notna().mean():.0%}）")
+            else:
+                col = fmod.COMP_COLS[k]
+                score = panel[col].fillna(0.5)
+            val += cw * score
     else:
         # 配方模式：Σ 组合权重 × 成员得分
         for name, cw in wnorm.items():

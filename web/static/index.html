@@ -148,6 +148,21 @@ input:focus,select:focus { outline:none; border-color:var(--accent); }
 .tabbar a { padding:5px 12px; border-radius:7px; color:var(--muted); cursor:pointer; font-size:12.5px; }
 .tabbar a.on { background:var(--panel-3); color:var(--text); }
 .empty-hint { color:var(--faint); text-align:center; padding:26px 0; font-size:12.5px; }
+
+/* ===== 因子编辑弹窗 ===== */
+.modal-mask { position:fixed; inset:0; background:rgba(4,8,14,.66); backdrop-filter:blur(3px); z-index:50; display:flex; align-items:center; justify-content:center; }
+.modal { width:680px; max-width:94vw; max-height:88vh; overflow:auto; background:linear-gradient(180deg,#101a28,#0b1119); border:1px solid var(--border-strong); border-radius:14px; padding:22px 26px; box-shadow:0 18px 60px rgba(0,0,0,.55); }
+.modal h3 { margin-bottom:16px; }
+.mrow { display:flex; gap:14px; margin-bottom:11px; }
+.mrow label { flex:1; font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:5px; }
+.mrow input, .mrow textarea { background:#0a0f16; border:1px solid var(--border); color:var(--text); border-radius:8px; padding:7px 10px; font-size:13px; width:100%; box-sizing:border-box; }
+.mrow input:focus, .mrow textarea:focus { outline:none; border-color:var(--accent); }
+.mrow textarea { font-family:Consolas,'Courier New',monospace; resize:vertical; }
+.mhelp { background:#0a0f16; border:1px solid var(--border); border-radius:10px; padding:10px 13px; font-size:11.5px; color:var(--muted); line-height:2.1; }
+.mhelp b { color:var(--text); margin-right:6px; }
+.chip { display:inline-block; background:rgba(45,212,191,.07); border:1px solid rgba(45,212,191,.18); color:#8ee8dc; border-radius:6px; padding:1px 7px; margin:0 4px 2px 0; cursor:pointer; font-family:Consolas,monospace; }
+.chip:hover { background:rgba(45,212,191,.16); }
+.chip i { font-style:normal; color:#5b6b80; margin-left:5px; font-family:inherit; }
 </style>
 </head>
 <body>
@@ -194,15 +209,19 @@ input:focus,select:focus { outline:none; border-color:var(--accent); }
     <!-- ===== 因子工作台 ===== -->
     <div v-if="tab==='workbench'">
       <div class="panel">
-        <h3>因子池 <span class="sub">点击卡片加入 / 移出组合，共 {{pool.length}} 个基础因子</span></h3>
+        <h3>因子池 <span class="sub">点击卡片加入 / 移出组合，共 {{pool.length}} 个因子（含自定义 {{customCount}} 个）</span>
+          <button class="btn ghost" style="float:right;margin-top:-4px;" @click="openFacEditor()">＋ 新建因子</button>
+        </h3>
         <div class="pool-grid">
           <div class="fcard" v-for="f in pool" :key="f.key" :class="{sel:wbSel[f.key]}" @click="wbToggle(f.key)">
-            <div class="f-name">{{f.name}}<span class="f-key">{{f.key}}</span></div>
-            <div class="f-desc">{{f.desc}}</div>
+            <div class="f-name">{{f.name}}<span class="f-key">{{f.key}}</span>
+              <span v-if="f.custom" class="badge cat-quality" style="margin-left:6px;" @click.stop="openFacEditor(f)">编辑</span>
+            </div>
+            <div class="f-desc">{{f.custom ? f.expr : f.desc}}</div>
             <div class="f-meta">
               <span class="badge" :class="catColor(f.category)">{{f.category}}</span>
-              <div class="usage" :title="'preset 配方引用度 '+Math.round(f.recipe_usage*100)+'%'"><i :style="{width:(f.recipe_usage*100)+'%'}"></i></div>
-              <span class="muted" style="font-size:10.5px;">{{Math.round(f.recipe_usage*100)}}%</span>
+              <div class="usage" v-if="!f.custom" :title="'preset 配方引用度 '+Math.round(f.recipe_usage*100)+'%'"><i :style="{width:(f.recipe_usage*100)+'%'}"></i></div>
+              <span class="muted" v-if="!f.custom" style="font-size:10.5px;">{{Math.round(f.recipe_usage*100)}}%</span>
             </div>
           </div>
         </div>
@@ -405,6 +424,37 @@ input:focus,select:focus { outline:none; border-color:var(--accent); }
         </table>
       </div>
     </div>
+    </div>
+    <!-- 新建/编辑自定义因子弹窗 -->
+    <div class="modal-mask" v-if="facEdit.open" @click.self="facEdit.open=false">
+      <div class="modal">
+        <h3>{{facEdit.isNew ? '＋ 新建因子' : '编辑因子 · ' + facEdit.form.key}}</h3>
+        <div class="mrow">
+          <label>因子名称<input v-model="facEdit.form.name" placeholder="如：60日价格偏离"></label>
+          <label>因子 key（保存后不可改）<input v-model="facEdit.form.key" :disabled="!facEdit.isNew" placeholder="如：mom60（小写字母开头）"></label>
+        </div>
+        <div class="mrow">
+          <label>表达式（输出一个因子值，系统自动按日截面排名到 0~1）
+            <textarea v-model="facEdit.form.expr" rows="3" placeholder="rank(close / ts_mean(close, 60))"></textarea>
+          </label>
+        </div>
+        <div class="mrow">
+          <label>说明<input v-model="facEdit.form.desc" placeholder="一句话描述经济含义（选填）"></label>
+        </div>
+        <div class="mhelp">
+          <b>变量</b><span class="chip" v-for="(v,k) in facEdit.vars" :key="'v'+k" @click="facEdit.form.expr += ' ' + k" :title="v">{{k}}</span>
+          <br><b>函数</b><span class="chip" v-for="(v,k) in facEdit.funcs" :key="'f'+k" @click="facEdit.form.expr = k + '(' + facEdit.form.expr + ')'" :title="v">{{k}}</span>
+          <br>示例：<span class="chip" @click="facEdit.form.expr = 'rank(close / ts_mean(close, 60))'">rank(close / ts_mean(close, 60))</span>
+          <span class="chip" @click="facEdit.form.expr = 'rank(_ep + _dy)'">rank(_ep + _dy)</span>
+          <span class="chip" @click="facEdit.form.expr = 'rank(ts_delta(_roe, 60))'">rank(ts_delta(_roe, 60))</span>
+        </div>
+        <div class="row" style="margin-top:16px;justify-content:flex-end;gap:10px;">
+          <span v-if="facEdit.msg" :class="facEdit.ok ? 'muted' : 'warn'" style="margin-right:auto;">{{facEdit.msg}}</span>
+          <button class="btn ghost" @click="facEdit.open=false">取消</button>
+          <button class="btn ghost" v-if="!facEdit.isNew" @click="deleteFactor()">删除</button>
+          <button class="btn primary" :disabled="facEdit.saving" @click="saveFactor()">{{facEdit.saving?'校验中…':'保存因子'}}</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
