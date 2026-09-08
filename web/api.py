@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -91,14 +89,54 @@ def _read_metrics(path: Path) -> dict | None:
 
 
 # ================================================================ 总览
+# v1.2：总览固定展示报告中的最优组合 Combo3（outputs/final5/combo_metrics_*），
+#       旧 top50 单因子产物仅作兜底（无 combo 产物时才读）。
+
+def _combo_info(tag: str) -> dict:
+    """读取某次组合回测的配置快照（名称/成员/区间）。"""
+    cfg_json = OUT / "final5" / f"combo_config_{tag}.json"
+    if cfg_json.exists():
+        try:
+            c = json.loads(cfg_json.read_text(encoding="utf-8"))
+            return {"name": c.get("combo", {}).get("name", ""),
+                    "members": c.get("combo", {}).get("members", {}),
+                    "period": c.get("period", {}),
+                    "top_n": c.get("combo", {}).get("top_n"),
+                    "max_weight": c.get("combo", {}).get("max_weight")}
+        except Exception:                                 # noqa: BLE001
+            pass
+    return {}
+
+
+def _overview_combo(tag: str, runs: list) -> dict:
+    """总览（Combo3 主线）：组合指标 + 净值 + 配置快照。
+
+    注意：outputs/risk 里的风控双线属于旧 top50 回测，与 Combo3 不是
+    同一条净值，混画会误导，故 combo 视图不拼风控线（风控页仍可单独看）。
+    """
+    out = {"tag": tag, "runs": runs, "source": "combo",
+           "locked": True, "combo": _combo_info(tag)}
+    m = _read_metrics(OUT / "final5" / f"combo_metrics_{tag}.csv")
+    if m:
+        out["metrics"] = m
+    eq = _read_csv(OUT / "final5" / f"combo_equity_{tag}.csv")
+    if eq is not None and not eq.empty:
+        eq["trade_date"] = eq["trade_date"].astype(str)
+        out["equity"] = eq.to_dict("records")
+    return out
+
 
 def overview() -> dict:
-    """最新回测的指标 + 净值曲线（无风控，以及风控双线若有）。"""
+    """最新回测的指标 + 净值曲线。优先 Combo3 组合产物，旧 top50 兜底。"""
+    combo_tags = _list_combo_tags()
+    if combo_tags:
+        return _overview_combo(combo_tags[0], combo_tags)
+
     tags = _list_runs("top50", "metrics")
     if not tags:
         return {"error": "尚无回测产物"}
     tag = tags[0]
-    out = {"tag": tag, "runs": tags}
+    out = {"tag": tag, "runs": tags, "source": "top50"}
 
     m = _read_metrics(OUT / "top50" / f"metrics_{tag}.csv")
     if m:
@@ -125,6 +163,25 @@ def overview() -> dict:
 # ================================================================ 回测明细
 
 def backtests() -> list:
+    """回测历史：优先 Combo3 组合回测，无则退回旧 top50。"""
+    combo_tags = _list_combo_tags()
+    if combo_tags:
+        runs = []
+        for tag in combo_tags:
+            m = _read_metrics(OUT / "final5" / f"combo_metrics_{tag}.csv")
+            if not m:
+                continue
+            info = _combo_info(tag)
+            runs.append({
+                "tag": tag,
+                "名称": info.get("name", ""),
+                "总收益率": m.get("总收益率"),
+                "年化收益率": m.get("年化收益率"),
+                "夏普比率": m.get("夏普比率"),
+                "最大回撤": m.get("最大回撤"),
+            })
+        return runs
+
     tags = _list_runs("top50", "metrics")
     runs = []
     for tag in tags:
@@ -133,6 +190,7 @@ def backtests() -> list:
             continue
         runs.append({
             "tag": tag,
+            "名称": "旧 Top50 单因子回测",
             "总收益率": m.get("总收益率"),
             "年化收益率": m.get("年化收益率"),
             "夏普比率": m.get("夏普比率"),
@@ -142,15 +200,20 @@ def backtests() -> list:
 
 
 def backtest_detail(tag: str) -> dict:
+    """回测明细：final5 下的 combo tag 读组合产物，否则读旧 top50。"""
     out = {"tag": tag}
-    m = _read_metrics(OUT / "top50" / f"metrics_{tag}.csv")
+    is_combo = (OUT / "final5" / f"combo_metrics_{tag}.csv").exists()
+    mdir = OUT / "final5" if is_combo else OUT / "top50"
+    m = _read_metrics(mdir / f"{'combo_' if is_combo else ''}metrics_{tag}.csv")
     if m:
         out["metrics"] = m
-    eq = _read_csv(OUT / "top50" / f"equity_{tag}.csv")
+    if is_combo:
+        out["combo"] = _combo_info(tag)
+    eq = _read_csv(mdir / f"{'combo_' if is_combo else ''}equity_{tag}.csv")
     if eq is not None and not eq.empty:
         eq["trade_date"] = eq["trade_date"].astype(str)
         out["equity"] = eq.to_dict("records")
-    w = _read_csv(OUT / "top50" / f"weights_{tag}.csv")
+    w = _read_csv(mdir / f"{'combo_' if is_combo else ''}weights_{tag}.csv")
     if w is not None and not w.empty:
         w["trade_date"] = w["trade_date"].astype(str)
         out["weights"] = w.head(500).to_dict("records")
@@ -200,82 +263,14 @@ def factor_config() -> dict:
 
 
 def save_factor_config(payload: dict) -> dict:
-    """校验并写回 factors.yaml（备份 + 原子写）。返回新配置。
+    """v1.2 起因子集锁定：应用不允许增删/启停/改权任何因子。
 
-    payload 结构（与 factor_config() 返回一致，可只带要改的键）：
-      factors: {因子名: {enabled?, direction?, params?, name?}}
-      composite: {method?, weights?}
+    本报告（Combo3）的因子清单与权重是经过样本内检验 + 样本外验证的
+    固定配置，界面上任何增减都会让展示结果与报告不可追溯。如确需研究
+    性调整，请直接改 config/factors.yaml 后走命令行回测。
     """
-    if not FACTOR_YAML.exists():
-        return {"error": f"配置文件不存在: {FACTOR_YAML}"}
-    raw = yaml.safe_load(FACTOR_YAML.read_text(encoding="utf-8")) or {}
-    factors = raw.setdefault("factors", {}) or {}
-    comp = raw.setdefault("composite", {}) or {}
-
-    # ---- 校验并应用因子修改 ----
-    new_factors = payload.get("factors") or {}
-    for key, changes in new_factors.items():
-        if key not in factors:
-            return {"error": f"未知因子: {key}（可用: {sorted(factors)}）"}
-        cur = factors[key]
-        if "enabled" in changes:
-            if not isinstance(changes["enabled"], bool):
-                return {"error": f"{key}.enabled 必须是 true/false"}
-            cur["enabled"] = changes["enabled"]
-        if "direction" in changes:
-            d = changes["direction"]
-            if d not in (-1, 0, 1):
-                return {"error": f"{key}.direction 必须是 -1/0/1"}
-            cur["direction"] = int(d)
-        if "params" in changes:
-            if not isinstance(changes["params"], dict):
-                return {"error": f"{key}.params 必须是对象"}
-            cur["params"] = {**cur.get("params", {}), **changes["params"]}
-        if "name" in changes and isinstance(changes["name"], str) and changes["name"].strip():
-            cur["name"] = changes["name"].strip()
-
-    # ---- 校验并应用合成配置 ----
-    new_comp = payload.get("composite") or {}
-    if "method" in new_comp:
-        m = new_comp["method"]
-        if m not in ("custom", "equal_weight"):
-            return {"error": f"composite.method 必须是 custom/equal_weight, 收到 {m}"}
-        comp["method"] = m
-    if "weights" in new_comp:
-        w = new_comp["weights"]
-        if not isinstance(w, dict):
-            return {"error": "composite.weights 必须是对象"}
-        ws = {}
-        for k, v in w.items():
-            try:
-                vv = float(v)
-            except (TypeError, ValueError):
-                return {"error": f"权重 {k} 必须是数字"}
-            if vv < 0:
-                return {"error": f"权重 {k} 不能为负"}
-            ws[k] = round(vv, 4)
-        if comp.get("method") == "custom" and sum(ws.values()) <= 0:
-            return {"error": "custom 合成下权重之和必须 > 0"}
-        # 只更新已存在的因子键，避免写进无关键
-        comp["weights"] = {k: v for k, v in ws.items() if k in factors}
-        if sum(comp["weights"].values()) <= 0:
-            return {"error": "合成权重全部为 0，无法合成"}
-        # 归一化到 1（保留 4 位）
-        tot = sum(comp["weights"].values())
-        comp["weights"] = {k: round(v / tot, 4) for k, v in comp["weights"].items()}
-
-    # ---- 备份 + 原子写回 ----
-    bak = CONFIG_DIR / f"factors.yaml.bak_{datetime.now():%Y%m%d_%H%M%S}"
-    try:
-        shutil.copy2(FACTOR_YAML, bak)
-        FACTOR_YAML.write_text(
-            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-    except Exception as e:                               # noqa: BLE001
-        return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
-
-    return {"ok": True, "backup": bak.name, "config": factor_config()}
+    return {"error": "因子集已锁定（v1.2）：应用内不允许添加、删减、启停因子或修改权重。"
+                     "如需研究性调整请直接编辑 config/factors.yaml。"}
 
 
 # ================================================================ 组合回测（final5 因子目录 + combo.yaml）
@@ -318,83 +313,21 @@ def combo_config() -> dict:
         "period": {"start": str(period.get("start", "2021-01-01")),
                    "end": str(period.get("end", "2025-12-31"))},
         "catalog": _combo_catalog(),
-        "note": "成员子权重（mom/ep/lvol 等）由因子目录定义，此处只调组合层权重",
+        "locked": True,
+        "note": "v1.2 起组合锁定为报告中的最优组合 Combo3 · 动量红利低波，"
+                "成员与权重不可增减修改；「重新回测」按当前固定配置运行",
     }
 
 
 def save_combo_config(payload: dict) -> dict:
-    """校验并写回 combo.yaml（备份 + 原子写）。"""
-    if not COMBO_YAML.exists():
-        return {"error": f"配置文件不存在: {COMBO_YAML}"}
-    catalog_names = [f["name"] for f in _combo_catalog() if "name" in f]
-    raw = yaml.safe_load(COMBO_YAML.read_text(encoding="utf-8")) or {}
-    combo = raw.setdefault("combo", {}) or {}
+    """v1.2 起组合锁定：不允许增删成员/改权重/改持仓参数。
 
-    new_members = payload.get("members")
-    if new_members is not None:
-        if not isinstance(new_members, dict) or not new_members:
-            return {"error": "members 必须是非空对象 {因子名: 权重}"}
-        for k, v in new_members.items():
-            if k not in catalog_names:
-                return {"error": f"未知成员因子: {k}（可选: {catalog_names}）"}
-            try:
-                fv = float(v)
-            except (TypeError, ValueError):
-                return {"error": f"成员权重 {k} 必须是数字"}
-            if fv <= 0:
-                return {"error": f"成员权重 {k} 必须 > 0"}
-        combo["members"] = {k: round(float(v), 4) for k, v in new_members.items()}
-
-    if "method" in payload:
-        m = payload["method"]
-        if m not in ("custom", "equal_weight"):
-            return {"error": f"method 必须是 custom/equal_weight, 收到 {m}"}
-        combo["method"] = m
-    if combo.get("method", "custom") == "custom" and combo.get("members"):
-        if sum(float(v) for v in combo["members"].values()) <= 0:
-            return {"error": "custom 模式下成员权重之和必须 > 0"}
-
-    if "top_n" in payload:
-        try:
-            tn = int(payload["top_n"])
-        except (TypeError, ValueError):
-            return {"error": "top_n 必须是整数"}
-        if not 5 <= tn <= 300:
-            return {"error": "top_n 取值范围 5~300"}
-        combo["top_n"] = tn
-    if "max_weight" in payload:
-        try:
-            mw = float(payload["max_weight"])
-        except (TypeError, ValueError):
-            return {"error": "max_weight 必须是数字"}
-        if not 0.005 <= mw <= 0.5:
-            return {"error": "max_weight 取值范围 0.005~0.5"}
-        combo["max_weight"] = round(mw, 4)
-    if "name" in payload and isinstance(payload["name"], str) and payload["name"].strip():
-        combo["name"] = payload["name"].strip()
-
-    period = raw.setdefault("period", {}) or {}
-    for key in ("start", "end"):
-        if key in payload.get("period", {}):
-            try:
-                pd.Timestamp(str(payload["period"][key]))
-            except Exception:                             # noqa: BLE001
-                return {"error": f"period.{key} 不是合法日期"}
-            period[key] = str(payload["period"][key])
-    if "period" in payload and period.get("start") and period.get("end"):
-        if str(period["start"]) >= str(period["end"]):
-            return {"error": "period.start 必须早于 period.end"}
-
-    bak = CONFIG_DIR / f"combo.yaml.bak_{datetime.now():%Y%m%d_%H%M%S}"
-    try:
-        shutil.copy2(COMBO_YAML, bak)
-        COMBO_YAML.write_text(
-            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-    except Exception as e:                                # noqa: BLE001
-        return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
-    return {"ok": True, "backup": bak.name, "config": combo_config()}
+    Combo3（MD-Mom50 + DV-LV50 + GM-LV50 等权，Top50、单票上限 5%）
+    是报告中交付且经样本外验证的最优组合，界面层任何改动都会造成
+    应用展示与报告数字不可追溯。研究性调整请直接编辑 config/combo.yaml。
+    """
+    return {"error": "组合已锁定（v1.2）：成员因子与权重固定为报告中的 Combo3，"
+                     "不允许添加或删减因子。如需研究性调整请直接编辑 config/combo.yaml。"}
 
 
 def _list_combo_tags() -> list:

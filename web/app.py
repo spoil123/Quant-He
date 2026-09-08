@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from web import api, runner
 
-app = FastAPI(title="量化交易系统", version="1.0")
+app = FastAPI(title="量化交易系统", version="1.2")
 
 STATIC = ROOT / "web" / "static"
 
@@ -52,9 +52,7 @@ def get_factor_config():
     return api.factor_config()
 
 
-@app.put("/api/factor-config")
-def put_factor_config(payload: dict):
-    return api.save_factor_config(payload)
+# v1.2 因子集锁定：不再提供 PUT /api/factor-config 写入接口
 
 
 @app.get("/api/combo-config")
@@ -62,9 +60,7 @@ def get_combo_config():
     return api.combo_config()
 
 
-@app.put("/api/combo-config")
-def put_combo_config(payload: dict):
-    return api.save_combo_config(payload)
+# v1.2 组合锁定为 Combo3：不再提供 PUT /api/combo-config 写入接口
 
 
 @app.get("/api/combo-results")

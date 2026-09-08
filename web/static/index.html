@@ -52,17 +52,26 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
     <a :class="{on:tab==='overview'}" @click="tab='overview'">总览</a>
     <a :class="{on:tab==='backtest'}" @click="tab='backtest'">回测</a>
     <a :class="{on:tab==='factors'}" @click="tab='factors'">因子</a>
-    <a :class="{on:tab==='factorconfig'}" @click="tab='factorconfig'">因子配置</a>
+    <a :class="{on:tab==='factorconfig'}" @click="tab='factorconfig'">因子清单</a>
     <a :class="{on:tab==='combo'}" @click="tab='combo'">组合回测</a>
     <a :class="{on:tab==='risk'}" @click="tab='risk'">风控与监控</a>
-    <span style="margin-left:auto; color:var(--muted); font-size:12px;">Top50 五因子 · 本机</span>
+    <span style="margin-left:auto; color:var(--muted); font-size:12px;">Combo3 · 动量红利低波 · v1.2 · 因子集已锁定</span>
   </div>
 
   <div class="container">
     <!-- 总览 -->
     <div v-if="tab==='overview'">
+      <div class="panel" style="padding:10px 16px; margin-bottom:12px;">
+        <div class="row">
+          <span class="badge green">最优组合 · 报告同款</span>
+          <b>{{ovCombo.name || 'Combo3 · 动量红利低波'}}</b>
+          <span class="muted" v-if="ovCombo.period && ovCombo.period.start">{{ovCombo.period.start}} ~ {{ovCombo.period.end}}</span>
+          <span class="muted">成员：{{comboMembers()}}</span>
+          <span class="badge amber">因子集已锁定，不可增减</span>
+        </div>
+      </div>
       <div class="row" style="margin-bottom:14px;">
-        <span class="muted">回测区间：</span>
+        <span class="muted">回测批次：</span>
         <button class="btn" :class="{}" @click="loadOverview('latest')">最新</button>
         <select v-model="ovTag" @change="loadOverview(ovTag)" style="min-width:200px;">
           <option v-for="t in ovRuns" :value="t">{{t}}</option>
@@ -74,17 +83,20 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
           <div class="val" :class="isPct(k)||isLoss(v)?(num(v)<0?'down':'up'):''">{{fmtVal(k,v)}}</div>
         </div>
       </div>
-      <div class="panel"><h3>净值曲线（无风控 / 有风控）</h3><div class="chart" id="ovChart" ref="ovChart"></div></div>
+      <div class="panel">
+        <h3>净值曲线（Combo3 含真实成本 · 保守档）</h3><div class="chart" id="ovChart" ref="ovChart"></div>
+      </div>
     </div>
 
     <!-- 回测 -->
     <div v-if="tab==='backtest'">
       <div class="panel">
-        <h3>历史回测记录</h3>
+        <h3>历史回测记录（Combo3 组合）</h3>
         <table>
-          <tr><th>运行</th><th>总收益率</th><th>年化收益率</th><th>夏普</th><th>最大回撤</th></tr>
+          <tr><th>运行</th><th>组合</th><th>总收益率</th><th>年化收益率</th><th>夏普</th><th>最大回撤</th></tr>
           <tr v-for="b in btList" :key="b.tag" @click="loadBacktest(b.tag)" style="cursor:pointer;">
             <td>{{b.tag}}</td>
+            <td class="muted">{{b['名称']}}</td>
             <td :class="b['总收益率']>0?'up':'down'">{{pct(b['总收益率'])}}</td>
             <td :class="b['年化收益率']>0?'up':'down'">{{pct(b['年化收益率'])}}</td>
             <td>{{b['夏普比率']}}</td>
@@ -123,43 +135,31 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
       <div class="panel"><h3>IC 时间序列（月频）</h3><div class="chart" id="icChart" ref="icChart"></div></div>
     </div>
 
-    <!-- 因子配置 -->
+    <!-- 因子清单（v1.2 只读：因子集锁定，不可增删） -->
     <div v-if="tab==='factorconfig'">
       <div class="panel">
-        <h3>因子配置 · 修改保存后生效，可一键重跑回测</h3>
-        <div class="muted" style="margin-bottom:10px;">
-          权重 = 样本内(2015-2018) IC 定权基准；改后请点「保存并重跑」。参数改动直接写回 config/factors.yaml（自动备份）。
+        <h3>因子清单 · 固定配置（与项目报告一致）</h3>
+        <div class="row" style="margin-bottom:10px;">
+          <span class="badge amber">🔒 因子集已锁定</span>
+          <span class="muted">
+            以下 {{Object.keys(fc.factors||{}).length}} 个成分因子与合成权重为报告交付的固定配置
+            （样本内 IC 定权 + 样本外验证），应用内不允许添加、删减、启停因子或修改权重。
+          </span>
         </div>
         <table>
-          <tr><th>启用</th><th>因子</th><th>方向</th><th>权重(custom)</th><th>handler</th><th>参数</th></tr>
+          <tr><th>状态</th><th>因子</th><th>方向</th><th>合成权重(custom)</th><th>handler</th><th>参数</th></tr>
           <tr v-for="(f,key) in fc.factors">
-            <td><input type="checkbox" v-model="f.enabled"></td>
+            <td><span class="badge" :class="f.enabled?'green':'red'">{{f.enabled?'启用':'停用'}}</span></td>
             <td>{{f.name}} <span class="muted">({{key}})</span></td>
-            <td>
-              <select v-model="f.direction" style="width:64px;">
-                <option :value="1">正向 +1</option>
-                <option :value="-1">反向 -1</option>
-                <option :value="0">停用 0</option>
-              </select>
-            </td>
-            <td><input type="number" v-model="fcWeight[key]" step="0.01" min="0" style="width:70px;"></td>
+            <td class="muted">{{f.direction===1?'正向 +1':(f.direction===-1?'反向 -1':'停用 0')}}</td>
+            <td>{{(((fc.composite.weights||{})[key]||0)*100).toFixed(1)}}%</td>
             <td class="muted">{{f.handler}}</td>
             <td class="muted">{{f.params && Object.keys(f.params).length ? JSON.stringify(f.params) : '-'}}</td>
           </tr>
         </table>
-        <div class="row" style="margin:10px 0;">
-          <span class="muted">合成方式：</span>
-          <select v-model="fc.composite.method" style="width:120px;">
-            <option value="custom">custom 权重</option>
-            <option value="equal_weight">等权</option>
-          </select>
-          <span class="muted" style="margin-left:16px;">权重和: {{fcWeightSum().toFixed(2)}}</span>
-          <span v-if="!fcWeightOk()" class="warn" style="margin-left:12px;">⚠ custom 模式权重和必须 > 0</span>
-        </div>
-        <div class="row">
-          <button class="btn" :disabled="running || !fcWeightOk()" @click="saveFactorConfig(false)">保存配置</button>
-          <button class="btn" :disabled="running || !fcWeightOk()" @click="saveFactorConfig(true)">保存并重跑 Top50 {{running?'(运行中)':''}}</button>
-          <span v-if="fcMsg" class="muted" style="margin-left:10px;">{{fcMsg}}</span>
+        <div class="row" style="margin-top:10px;">
+          <span class="muted">合成方式：{{fc.composite && fc.composite.method==='equal_weight' ? '等权' : 'custom 权重'}}</span>
+          <span class="muted" style="margin-left:16px;">如需研究性调整：直接编辑 config/factors.yaml 后走命令行回测（不进本应用）</span>
         </div>
       </div>
     </div>
@@ -167,38 +167,39 @@ input,select { background:var(--panel2); border:1px solid var(--border); color:v
     <!-- 组合回测 -->
     <div v-if="tab==='combo'">
       <div class="panel">
-        <h3>组合因子配置 · 勾选成员 + 调组合权重，一键回测</h3>
-        <div class="muted" style="margin-bottom:10px;">
-          成员来自本地验证过的 5 个达标因子（多头夏普 1.28~1.44）；下方只调<b>组合层</b>权重与持仓参数，
-          成员内部的子权重由因子目录定义。改完点「保存并回测」，面板缓存离线可跑（无需数据库）。
+        <h3>组合配置 · 固定为报告最优组合 Combo3（不可增减成员）</h3>
+        <div class="row" style="margin-bottom:10px;">
+          <span class="badge amber">🔒 组合已锁定</span>
+          <span class="muted">
+            成员因子、组合权重、持仓参数均与项目报告一致（样本内筛选 + Walk-Forward 样本外验证），
+            应用内不允许添加或删减因子。下方仅可按固定配置重新回测。
+          </span>
         </div>
         <div class="row" style="margin-bottom:10px;" v-if="cb.name !== undefined">
-          <label>组合名称 <input v-model="cb.name" style="width:180px;"></label>
-          <label>合成方式
-            <select v-model="cb.method" style="width:130px;">
-              <option value="custom">custom 权重</option>
-              <option value="equal_weight">等权</option>
-            </select>
-          </label>
-          <label>TopN <input type="number" v-model.number="cb.top_n" min="5" max="300" style="width:70px;"></label>
-          <label>单票上限 <input type="number" v-model.number="cb.max_weight" step="0.01" min="0.005" max="0.5" style="width:70px;"></label>
-          <label>起始 <input type="date" v-model="cbStart" style="width:140px;"></label>
-          <label>结束 <input type="date" v-model="cbEnd" style="width:140px;"></label>
+          <span>组合：<b>{{cb.name}}</b></span>
+          <span class="muted">合成方式：{{cb.method==='equal_weight'?'等权':'custom 权重'}}</span>
+          <span class="muted">Top{{cb.top_n}}</span>
+          <span class="muted">单票上限 {{(cb.max_weight*100).toFixed(0)}}%</span>
+          <span class="muted">区间 {{cbStart}} ~ {{cbEnd}}</span>
         </div>
         <table v-if="cb.members">
           <tr><th>成员</th><th>组合权重(custom)</th><th>成员子权重</th><th>默认持仓</th><th>说明</th></tr>
           <tr v-for="f in cb.catalog" :key="f.name">
-            <td><label style="cursor:pointer;"><input type="checkbox" v-model="cbSel[f.name]"> {{f.name}}</label></td>
-            <td><input type="number" v-model="cbWeight[f.name]" step="0.1" min="0" style="width:70px;" :disabled="cb.method==='equal_weight'"></td>
+            <td>
+              <span class="badge" :class="cb.members[f.name]!==undefined?'green':''">
+                {{cb.members[f.name]!==undefined?'✓ 成员':'未入选'}}
+              </span>
+              {{f.name}}
+            </td>
+            <td>{{cb.members[f.name]!==undefined ? ((cb.members[f.name]*100).toFixed(1)+'%') : '-'}}</td>
             <td class="muted" style="max-width:340px;">{{subW(f.sub_weights)}}</td>
             <td class="muted">Top{{f.topn}} / 上限{{(f.max_weight*100).toFixed(0)}}%</td>
             <td class="muted">{{f.desc}}</td>
           </tr>
         </table>
         <div class="row" style="margin-top:10px;">
-          <button class="btn" :disabled="cbRunning" @click="saveCombo(false)">保存配置</button>
-          <button class="btn" :disabled="cbRunning || !cbOk()" @click="saveCombo(true)">保存并回测 {{cbRunning?'(回测运行中…)':''}}</button>
-          <span v-if="!cbOk()" class="warn">⚠ 请至少勾选一个成员</span>
+          <button class="btn" :disabled="cbRunning" @click="runCombo()">重新回测（固定配置） {{cbRunning?'(回测运行中…)':''}}</button>
+          <span class="muted">按上方锁定配置与区间运行，产出新批次后总览自动切换为最新结果</span>
           <span v-if="cbMsg" class="muted" style="margin-left:10px;">{{cbMsg}}</span>
         </div>
       </div>

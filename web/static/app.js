@@ -10,6 +10,7 @@ const app = createApp({
     const ovEquity = ref([]);
     const ovPlain = ref([]);
     const ovRisk = ref([]);
+    const ovCombo = ref({});        // Combo3 配置快照（名称/成员/区间）
     const btList = ref([]);
     const btDetail = ref({});
     const icTable = ref([]);
@@ -67,10 +68,11 @@ const app = createApp({
       ovTag.value = tag === 'latest' ? (d.tag || '') : tag;
       ovMetrics.value = d.metrics || {};
       ovEquity.value = d.equity || [];
+      ovCombo.value = d.combo || {};
       ovPlain.value = d.equity_plain || [];
       ovRisk.value = d.equity_risk || [];
       await nextTick();
-      const series = [{ name: '无风控', type: 'line', showSymbol: false, data: ovEquity.value.map(r => num(r.equity)), lineStyle: { color: '#e24b4a', width: 2 } }];
+      const series = [{ name: 'Combo3 净值', type: 'line', showSymbol: false, data: ovEquity.value.map(r => num(r.equity)), lineStyle: { color: '#e24b4a', width: 2 } }];
       if (ovPlain.value.length && ovRisk.value.length) {
         series.push({ name: '风控前', type: 'line', showSymbol: false, data: ovPlain.value.map(r => num(r.equity)), lineStyle: { color: '#e24b4a', width: 1.5, type: 'dashed' } });
         series.push({ name: '风控后', type: 'line', showSymbol: false, data: ovRisk.value.map(r => num(r.equity)), lineStyle: { color: '#378add', width: 2 } });
@@ -157,63 +159,11 @@ const app = createApp({
 
     async function loadMonitor() { mon.value = await get('/api/monitor'); }
 
-    // ---------------- 因子配置（App 内调换因子） ----------------
-    const fc = ref(null);            // 因子配置（GET /api/factor-config）
-    const fcWeight = reactive({});   // 权重输入框
-    const fcMsg = ref('');
-
-    function fcWeightSum() {
-      let s = 0;
-      for (const k in fcWeight) s += num(fcWeight[k]);
-      return s;
-    }
-    function fcWeightOk() {
-      return !fc.value || fc.value.composite.method !== 'custom' || fcWeightSum() > 0;
-    }
+    // ---------------- 因子清单（v1.2 只读：因子集锁定，不可增删） ----------------
+    const fc = ref({});              // 因子配置（GET /api/factor-config）
 
     async function loadFactorConfig() {
-      fc.value = await get('/api/factor-config');
-      if (!fc.value || fc.value.error) { fcMsg.value = (fc.value && fc.value.error) || '加载失败'; return; }
-      for (const k in fc.value.factors) {
-        fcWeight[k] = fc.value.composite.weights[k] ?? 0;
-      }
-    }
-
-    async function saveFactorConfig(withRerun) {
-      if (!fc.value) return;
-      running.value = true; fcMsg.value = '保存中...';
-      const payload = { factors: {}, composite: { method: fc.value.composite.method } };
-      for (const k in fc.value.factors) {
-        const f = fc.value.factors[k];
-        payload.factors[k] = { enabled: !!f.enabled, direction: num(f.direction) };
-      }
-      if (fc.value.composite.method === 'custom') {
-        const w = {};
-        for (const k in fcWeight) w[k] = num(fcWeight[k]);
-        payload.composite.weights = w;
-      }
-      const r = await fetch('/api/factor-config', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).then(x => x.json());
-      if (r.error) { fcMsg.value = '保存失败: ' + r.error; running.value = false; return; }
-      fcMsg.value = '已保存（备份 ' + r.backup + '）' + (withRerun ? '，开始重跑...' : '');
-      if (!withRerun) { running.value = false; await loadFactorConfig(); return; }
-
-      const rr = await fetch('/api/run/backtest', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start: '2019-01-01', end: '2023-12-31' }),
-      }).then(x => x.json());
-      const t0 = Date.now();
-      const iv = setInterval(async () => {
-        const s = await get('/api/task/' + rr.task_id);
-        if (s.status === 'done' || s.status === 'failed' || Date.now() - t0 > 400000) {
-          clearInterval(iv); running.value = false;
-          fcMsg.value = s.status === 'done' ? '重跑完成，总览已刷新' : '重跑失败: ' + (s.error || (s.log_tail || []).join(' | ') || '');
-          await loadFactorConfig();           // 重新读（后端归一化后的权重）
-          loadOverview('latest');             // 刷新总览指标
-        }
-      }, 3000);
+      fc.value = await get('/api/factor-config') || {};
     }
 
     async function runRisk() {
@@ -232,19 +182,16 @@ const app = createApp({
       }, 3000);
     }
 
-    // ---------------- 组合回测（勾选成员 + 调组合权重 + 一键回测） ----------------
+    // ---------------- 组合回测（v1.2 只读：固定 Combo3，仅可重跑） ----------------
     const cb = reactive({});          // 组合配置（GET /api/combo-config）
-    const cbSel = reactive({});       // 成员勾选
-    const cbWeight = reactive({});    // 成员组合权重输入
     const cbStart = ref(''); const cbEnd = ref('');
     const cbMsg = ref(''); const cbRunning = ref(false);
     const cbRes = ref({});
 
     const subW = sw => Object.entries(sw || {}).slice(0, 4)
       .map(([k, v]) => k + ' ' + (v * 100).toFixed(0) + '%').join(' · ') + ' …';
-    function cbOk() {
-      return Object.keys(cbSel).some(k => cbSel[k]);
-    }
+    const comboMembers = () => Object.keys(ovCombo.value.members || cb.members || {})
+      .join(' + ') || 'MD-Mom50 + DV-LV50 + GM-LV50';
 
     async function loadCombo() {
       let d;
@@ -253,10 +200,6 @@ const app = createApp({
       if (!d || d.error) { cbMsg.value = (d && d.error) || '加载失败'; return; }
       Object.keys(cb).forEach(k => delete cb[k]);
       Object.assign(cb, d);
-      for (const f of d.catalog || []) {
-        cbSel[f.name] = f.name in d.members;
-        cbWeight[f.name] = d.members[f.name] ?? f.topn / 100.0;
-      }
       cbStart.value = d.period.start; cbEnd.value = d.period.end;
     }
 
@@ -278,27 +221,12 @@ const app = createApp({
       }
     }
 
-    async function saveCombo(withRun) {
-      if (!cb.members) return;
-      cbRunning.value = true; cbMsg.value = '保存中...';
-      const members = {};
-      for (const k in cbSel) if (cbSel[k]) members[k] = num(cbWeight[k]) || 1.0;
-      const payload = {
-        name: cb.name, method: cb.method, members,
-        top_n: cb.top_n, max_weight: cb.max_weight,
-        period: { start: cbStart.value, end: cbEnd.value },
-      };
-      const r = await fetch('/api/combo-config', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).then(x => x.json());
-      if (r.error) { cbMsg.value = '保存失败: ' + r.error; cbRunning.value = false; return; }
-      cbMsg.value = '已保存（备份 ' + r.backup + '）' + (withRun ? '，回测启动…' : '');
-      if (!withRun) { cbRunning.value = false; await loadCombo(); return; }
-
+    async function runCombo() {
+      cbRunning.value = true; cbMsg.value = '回测启动…';
+      // 固定配置重跑：不传参，区间/成员全部走锁定的 config/combo.yaml
       const rr = await fetch('/api/run/combo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start: cbStart.value, end: cbEnd.value }),
+        body: JSON.stringify({}),
       }).then(x => x.json());
       const t0 = Date.now();
       const iv = setInterval(async () => {
@@ -311,25 +239,12 @@ const app = createApp({
             ? '回测完成（' + sec + 's），结果已刷新'
             : '回测失败: ' + (s.error || '超时或查看 startup.log');
           await loadComboResults();
+          loadOverview('latest');
+          get('/api/backtests').then(d => { btList.value = d || []; });
         }
       }, 3000);
     }
 
-    async function runRisk() {
-      running.value = true;
-      const r = await fetch('/api/run/risk', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start: '2019-01-01', end: '2023-12-31' }),
-      }).then(x => x.json());
-      const t0 = Date.now();
-      const iv = setInterval(async () => {
-        const s = await get('/api/task/' + r.task_id);
-        if (s.status === 'done' || s.status === 'failed' || Date.now() - t0 > 400000) {
-          clearInterval(iv); running.value = false;
-          loadRisk();
-        }
-      }, 3000);
-    }
 
     onMounted(() => {
       // 并行加载、互不阻塞：/api/monitor 要查全库（约 1~2 分钟），
@@ -343,12 +258,12 @@ const app = createApp({
       jobs.forEach(p => p && p.catch && p.catch(() => {}));
     });
 
-    return { tab, ovTag, ovRuns, ovMetrics, ovEquity, btList, btDetail, icTable, icSeries, quantile, ftag,
+    return { tab, ovTag, ovRuns, ovMetrics, ovEquity, ovCombo, comboMembers,
+      btList, btDetail, icTable, icSeries, quantile, ftag,
       riskReport, riskEvents, rtag, mon, running, riskParm, num, pct, isPct, isLoss, fmtVal, fmtCell,
-      fc, fcWeight, fcMsg, fcWeightSum, fcWeightOk,
-      loadOverview, loadBacktest, runRisk, saveFactorConfig,
-      cb, cbSel, cbWeight, cbStart, cbEnd, cbMsg, cbRunning, cbRes,
-      cbOk, subW, saveCombo };
+      fc, loadOverview, loadBacktest, runRisk,
+      cb, cbStart, cbEnd, cbMsg, cbRunning, cbRes,
+      subW, runCombo };
   },
 });
 app.mount('#app');
