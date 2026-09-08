@@ -34,6 +34,12 @@ const app = createApp({
     const isLoss = v => v < 0;
     const fmtVal = (k, v) => (isPct(k) ? pct(v) : (typeof v === 'number' ? v.toFixed(3) : v));
     const fmtCell = v => (typeof v === 'number' ? (v * 100).toFixed(2) + '%' : (v ?? '-'));
+    // 风控对比表：夏普/卡玛等比率是倍数不是百分比，var/cvar/收益率/回撤才是百分比
+    const fmtMetric = (name, v) => {
+      if (typeof v !== 'number') return (v ?? '-');
+      if (String(name).includes('比率')) return v.toFixed(3);
+      return (v * 100).toFixed(2) + '%';
+    };
 
     async function get(url) { const r = await fetch(url); return r.json(); }
 
@@ -153,9 +159,15 @@ const app = createApp({
 
     async function runRisk() {
       running.value = true;
+      const body = {
+        tag: (cbRes.value && cbRes.value.tag) || '',
+        single_stock_drawdown: num(riskParm.single_stock_drawdown),
+        trailing_stop: num(riskParm.trailing_stop),
+        drawdown_trigger: num(riskParm.drawdown_trigger),
+      };
       const r = await fetch('/api/run/risk', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start: '2019-01-01', end: '2023-12-31' }),
+        body: JSON.stringify(body),
       }).then(x => x.json());
       const t0 = Date.now();
       const iv = setInterval(async () => {
@@ -429,7 +441,7 @@ const app = createApp({
 
     return { tab, pageTitle, ovTag, ovRuns, ovMetrics, ovEquity, ovCombo, comboMembers,
       btList, btDetail, icTable, icSeries, quantile, ftag,
-      riskReport, riskEvents, rtag, mon, running, riskParm, num, pct, isPct, isLoss, fmtVal, fmtCell,
+      riskReport, riskEvents, rtag, mon, running, riskParm, num, pct, isPct, isLoss, fmtVal, fmtCell, fmtMetric,
       fc, pool, wbSel, wbWeight, wbSelected, wbToggle, wbTouch, wbNormPct, wbEqual,
       factorName, catColor, customCount,
       facEdit, openFacEditor, saveFactor, deleteFactor, removeFactor,

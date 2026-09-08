@@ -24,7 +24,7 @@ _TASK_LOCK = threading.Lock()
 # task_name -> (模块路径, 额外固定参数)
 _TASK_MODULES = {
     "backtest": "scripts.run_top50_strategy",
-    "risk": "scripts.example_risk",
+    "risk": "scripts.run_combo_risk",
     "factors": "scripts.factor_evaluation",
     "combo": "scripts.run_combo_strategy",
 }
@@ -32,7 +32,7 @@ _TASK_MODULES = {
 
 def _build_argv(task_name: str, params: dict) -> list:
     """拼脚本 argv。combo 的默认区间来自 combo.yaml（面板缓存范围），
-    老任务的默认区间维持 2019-2023 不变。"""
+    risk 对最新组合 tag 的净值现算风控对比；老任务的默认区间维持 2019-2023 不变。"""
     start = params.get("start")
     end = params.get("end")
     if task_name == "combo":
@@ -41,6 +41,17 @@ def _build_argv(task_name: str, params: dict) -> list:
             argv += ["--start", str(start)]
         if end:
             argv += ["--end", str(end)]
+        return argv
+    if task_name == "risk":
+        argv = []
+        if params.get("tag"):
+            argv += ["--tag", str(params["tag"])]
+        for key in ("single_stock_drawdown", "trailing_stop", "drawdown_trigger"):
+            if params.get(key) is not None:
+                flag = {"single_stock_drawdown": "--stop",
+                        "trailing_stop": "--trailing",
+                        "drawdown_trigger": "--fuse"}[key]
+                argv += [flag, str(params[key])]
         return argv
     return ["--start", str(start or "2019-01-01"),
             "--end", str(end or "2023-12-31")]

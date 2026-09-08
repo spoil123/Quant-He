@@ -392,11 +392,11 @@ input:focus,select:focus { outline:none; border-color:var(--accent); }
 
     <!-- ===== 风控与监控 ===== -->
     <div v-if="tab==='risk'">
-      <div class="panel"><h3>风控前后对比 <span class="sub">{{rtag}}</span></h3>
+      <div class="panel"><h3>风控前后对比 <span class="sub">基于组合回测 {{rtag}} · 与「配方组合」页回测结果同源</span></h3>
         <table>
           <tr><th>指标</th><th>无风控</th><th>有风控</th></tr>
           <tr v-for="r in riskReport"><td>{{r['指标']}}</td>
-            <td>{{fmtCell(r['无风控'])}}</td><td>{{fmtCell(r['有风控'])}}</td></tr>
+            <td>{{fmtMetric(r['指标'], r['无风控'])}}</td><td>{{fmtMetric(r['指标'], r['有风控'])}}</td></tr>
         </table>
       </div>
       <div class="panel"><h3>净值对比</h3><div class="chart sm" id="riskChart" ref="riskChart"></div></div>
