@@ -281,6 +281,10 @@ def main() -> int:
                       datetime.strptime(rec["trade_date"], "%Y-%m-%d").date(),
                       datetime.min.time()))
         store.save_trade(t)
+        # 推进委托单状态（2026-09-09，第三轮审计 M2）：此前模拟落库只写
+        # submitted，DB 实证 300/300 全卡住 —— 全部历史单都是"未终结"候选，
+        # 污染 _match_order_id 启发式，模拟与实盘混用时成交错配。
+        store.advance_order_on_fill(oid)
         done += 1
 
     slip = pd.Series([r["slip_bps"] for r in trades])

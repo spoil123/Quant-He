@@ -238,6 +238,12 @@ def main() -> None:
 
     rows = []
     equities = []
+    # 跨 fold 累计净值（2026-09-09，第三轮审计 M4）：WF 总绩效把各段净值
+    # 复利拼接，但此前每个 fold 的成本/流动性基数都从 initial_cash 重新起算
+    # —— 后期 fold 组合实际已 2×+，参与率与佣金被系统性低估，外推绩效虚高。
+    # 传入累计资本后指标（收益率/夏普/回撤）不变，约束基数变正确。
+    cum = 1.0
+    initial_cash = float(scfg["backtest"]["initial_cash"])
     for train_s, train_e, test_s, test_e in folds:
         logger.info(f"fold: 训练 {train_s}~{train_e} → 测试 {test_s}~{test_e}")
         # 权重：--prod 用生产配置，否则训练期滚动 IC
@@ -258,8 +264,7 @@ def main() -> None:
             factor_cfg={"composite": {"method": "custom", "weights": w}})
         rb = monthly_rebalance_dates(sorted(test_panel["trade_date"].unique()),
                                      start=test_s, end=test_e)
-        bt = PortfolioBacktester(
-            initial_capital=float(scfg["backtest"]["initial_cash"]))
+        bt = PortfolioBacktester(initial_capital=initial_cash * cum)
         weights_df = bt.build_weights(
             test_panel, rb, top_n=int(sel["top_n"]), weighting=sel["weighting"],
             max_weight=float(sel["max_weight"]), min_weight=float(sel["min_weight"]))
@@ -280,6 +285,7 @@ def main() -> None:
                      "调仓次数": m["调仓次数"]})
         print(f"  {test_s[:4]} 测试期: 收益 {m['总收益率']:.2%}  夏普 {m['夏普比率']:.3f}  "
               f"回撤 {m['最大回撤']:.2%}")
+        cum *= 1.0 + float(m["总收益率"])
 
     # ---- 汇总：逐段链接拼接净值 → walk-forward 总绩效 ----
     # 不用 pd.concat：pandas 对多段 datetime index 的 concat 会触发巨大数组

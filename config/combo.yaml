@@ -9,6 +9,15 @@ combo:
   top_n: 50
   max_weight: 0.05
   custom_blend: null
+  custom_factors:
+  - key: mom60
+    name: 60日价格偏离
+    expr: rank(close / ts_mean(close, 60))
+    desc: 价格相对60日均线位置
+  - key: epdy
+    name: 价值质量
+    expr: rank(_ep + _bm)
+    desc: E/P+B/M 价值合成
 period:
   start: '2021-01-01'
   end: '2025-12-31'

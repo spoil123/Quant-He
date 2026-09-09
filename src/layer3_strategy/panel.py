@@ -214,8 +214,25 @@ def attach_raw_close(panel: pd.DataFrame) -> pd.DataFrame:
     out = panel.merge(m, on=["trade_date", "ts_code"], how="left")
     n_miss = int(out["raw_close"].isna().sum())
     if n_miss:
-        out["raw_close"] = out["raw_close"].fillna(out["close"])
-        logger.debug(f"raw_close 有 {n_miss} 行缺失，已用前复权价回填")
+        # 混基准防护（2026-09-09，第三轮审计 L2）：同一只股票的 raw_close
+        # 部分缺失时若用前复权价回填，BM=BPS/raw_close 在送转股上会出现
+        # 两套价格基准的跳变，截面排名错位。改为按股处理：
+        #   整只股票完全没有不复权价 → 整股退回前复权（股内基准一致）；
+        #   部分日期缺失 → 留 NaN（该格 BM 缺失由因子计算 dropna 兜底），
+        #   宁缺勿混。
+        has_raw = out.groupby("ts_code")["raw_close"].transform(
+            lambda s: s.notna().any())
+        fallback_mask = out["raw_close"].isna() & ~has_raw
+        out["raw_close"] = out["raw_close"].fillna(
+            out["close"].where(fallback_mask))
+        n_part = n_miss - int(fallback_mask.sum())
+        if n_part:
+            logger.warning(f"raw_close 有 {n_part} 行属「部分缺失」股票，"
+                           f"留 NaN 防止 BM 混用两套复权基准")
+        n_fb = int(fallback_mask.sum())
+        if n_fb:
+            logger.warning(f"{out.loc[fallback_mask, 'ts_code'].nunique()} 只股票"
+                           f"完全无不复权价，整股退回前复权口径（{n_fb} 行）")
     return out
 
 

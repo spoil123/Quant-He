@@ -13,6 +13,9 @@ data/
 # 打包产物
 build/
 dist/
+dist_build2_trash/
+dist_old_trash/
+release/
 
 # 环境
 .env
@@ -26,3 +29,13 @@ dist/
 temp/
 .pytest_cache/
 *.pkl
+
+# WorkBuddy 会话数据（私有，不入库）
+.workbuddy/
+
+# 配置备份与调试产物
+config/*.bak_*
+frameless_*.log
+frameless_*.png
+ui_check*.png
+assets/*_20*.png

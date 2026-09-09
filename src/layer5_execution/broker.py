@@ -43,6 +43,9 @@ class Trade:
     deal_price: float
     volume: int
     deal_time: datetime = field(default_factory=datetime.now)
+    # 券商端成交编号（QMT trade.traded_id）：成交回报去重的唯一依据，
+    # 断线重连时 QMT 会重放历史成交，没有它会导致重复行 + filled_volume 翻倍
+    broker_deal_id: Optional[str] = None
 
 
 class BaseBroker(ABC):

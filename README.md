@@ -2,7 +2,7 @@
 
 **A股五层多因子量化交易系统** —— 从数据获取到模拟交易的完整闭环，含因子挖掘、组合回测、样本外验证、风格归因、容量分析与 Web 桌面端。
 
-![CI](https://github.com/spoil123/Quant-He/actions/workflows/ci.yml/badge.svg) ![Python](https://img.shields.io/badge/Python-3.13-blue) ![MySQL](https://img.shields.io/badge/MySQL-8.0-orange) ![License](https://img.shields.io/badge/License-MIT-green) ![Status](https://img.shields.io/badge/status-v1.0_完成-brightgreen)
+![CI](https://github.com/spoil123/Quant-He/actions/workflows/ci.yml/badge.svg) ![Python](https://img.shields.io/badge/Python-3.13-blue) ![MySQL](https://img.shields.io/badge/MySQL-8.0-orange) ![License](https://img.shields.io/badge/License-MIT-green) ![Status](https://img.shields.io/badge/status-v2.2-brightgreen)
 
 ---
 
@@ -85,9 +85,11 @@ python build_exe.py      # 打包 Windows exe（assets/icon.ico 应用图标）
 
 无需 Python / MySQL：从 [Releases](https://github.com/spoil123/Quant-He/releases) 下载桌面版压缩包，解压双击 `QuantDesktop.exe` 即可。内置「组合回测」工作台：
 
-- **调换组合因子**：在 5 个达标因子（QV-Mom40 / MD-Mom50 / DV-LV50 / QV2-Mom60 / GM-LV50）中自由勾选成员、调整组合权重与 TopN / 单票上限
-- **一键回测**：2021-2025 全市场面板缓存内置（离线可跑，约 10 秒出结果），输出净值 / 绩效 / 调仓明细，配置快照可追溯
-- 自带应用图标、风控对比、数据健康监控等完整功能面板
+- **组合配置**：在 5 个达标因子（QV-Mom40 / MD-Mom50 / DV-LV50 / QV2-Mom60 / GM-LV50）中自由勾选成员、调整权重与 TopN / 单票上限，也可自定义因子
+- **自定义因子**：内置表达式引擎（AST 白名单，17 个基础变量 + rank/zscore/ts_* 时序函数），可在界面里随时新建因子并一键回测
+- **一键回测**：2021-2025 全市场面板缓存内置（离线可跑，约 10 秒出结果），输出净值 / 绩效 / 调仓明细，配置快照可追溯；风控页与回测同源现算（行业约束 / 止损 / 熔断对比）
+- **界面**：无边框原生窗口 + 动态极光深色界面（PyWebview），支持打包 Windows exe 免环境运行
+- 附数据健康监控、因子检验等完整面板
 
 ## 目录结构
 
@@ -104,7 +106,7 @@ Quant-He
 │   ├── layer5_execution/    # 模拟盘 / QMT
 │   └── layer5_scheduler/    # 调度 / 监控 / 流水线
 ├── scripts/                 # 数据更新 / 回测 / IC评估 / 归因 / 容量 / walk-forward
-├── tests/                   # 19 个测试文件（196 用例，离线可跑，CI 已接入）
+├── tests/                   # 19 个测试文件（209 用例，离线可跑，CI 已接入）
 ├── web/                     # FastAPI + Vue3 前端
 ├── deploy/                  # Linux / Windows 部署脚本
 ├── docs/

@@ -515,6 +515,8 @@ class PortfolioBacktester:
         stock_ret = (close / close_prev - 1.0).fillna(0.0)
         ret_hold_gross = (pos_prev * stock_ret).sum(axis=1)
         exec_gross = open_.fillna(close)     # 无成本成交价（近似：开盘价成交）
+        # 注（2026-09-09 第三轮复核）：sum(axis=1) 默认 skipna，缺价持仓的
+        # 0×NaN 贡献被自动跳过，与持有路径 fillna(0) 口径天然一致，无需再防御。
         r_old_gross = (pos_prev * (exec_gross / close_prev - 1.0)).sum(axis=1)
         r_new_gross = (pos * (close / exec_gross - 1.0)).sum(axis=1)
         is_rb = diff.abs().sum(axis=1) > 1e-10

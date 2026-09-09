@@ -101,7 +101,9 @@ def quantile_returns(
         "group": [f"Q{int(g)}" for g in summary.index],
         "mean_return": summary.values,
     })
-    out["annualized"] = out["mean_return"] * 12      # 月度收益年化的粗略换算
+    # 年化换算（2026-09-09，第三轮审计 L4）：mean_return 是 fwd_ret_20d
+    # （20 交易日）均值，年化应乘 252/20≈12.6 而非 12（旧口径低估约 5%）
+    out["annualized"] = out["mean_return"] * (252.0 / 20.0)
     return out
 
 

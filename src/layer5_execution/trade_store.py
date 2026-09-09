@@ -56,13 +56,27 @@ class TradeStore:
         return int(oid or 0)
 
     def save_trade(self, trade: Trade) -> int:
-        """保存成交回报，返回主键 id（lastrowid，防并发串线）。"""
+        """保存成交回报，返回主键 id（lastrowid，防并发串线）。
+
+        幂等去重（2026-09-09，第三轮审计 M3）：QMT 断线重连会重放同一笔
+        成交，(broker, broker_deal_id) 唯一键挡住重复行 —— 否则重复回报会
+        把 filled_volume 翻倍，状态机推进与 impact 回归全部失真。
+        模拟盘（无 broker_deal_id）走原路径不受影响。
+        """
+        if trade.broker_deal_id:
+            dup = execute(
+                "SELECT id FROM execution_trade "
+                "WHERE broker=:b AND broker_deal_id=:d LIMIT 1",
+                {"b": self.broker, "d": trade.broker_deal_id},
+            )
+            if not dup.empty:
+                return int(dup.iloc[0]["id"])
         sql = """
             INSERT INTO execution_trade
                 (order_id, broker, ts_code, side, order_price, deal_price,
-                 volume, deal_amount, deal_time)
+                 volume, deal_amount, deal_time, broker_deal_id)
             VALUES
-                (:oid, :broker, :code, :side, :op, :dp, :vol, :amt, :dt)
+                (:oid, :broker, :code, :side, :op, :dp, :vol, :amt, :dt, :did)
         """
         params = {
             "oid": trade.order_id, "broker": self.broker, "code": trade.ts_code,
@@ -70,6 +84,7 @@ class TradeStore:
             "vol": trade.volume,
             "amt": (trade.deal_price * trade.volume) if trade.deal_price else None,
             "dt": trade.deal_time,
+            "did": trade.broker_deal_id,
         }
         _, tid = execute(sql, params, need_lastrowid=True)
         return int(tid or 0)

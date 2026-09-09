@@ -158,6 +158,7 @@ class QmtBroker(BaseBroker):
                         deal_time=datetime.now(),
                     )
                     # 先落库拿 order_id：优先用下单时写入的本地 id 精确关联
+                    t.broker_deal_id = str(getattr(trade, "traded_id", "") or "")
                     t.order_id = broker._resolve_order_id(trade)
                     broker.store.save_trade(t)
                     # 推进委托单状态：不推进的话订单永远停在 submitted，
@@ -257,7 +258,12 @@ class QmtBroker(BaseBroker):
                 order.volume,
                 price_type,
                 float(order.price) if order.price else 0.0,
+                "",                  # strategy_name（占位，见下）
                 str(order_id),       # order_remark: 用本地 id 做关联
+                # 2026-09-09 修复（第三轮审计 M1）：order_stock 官方签名是
+                # 8 参 (…, price, strategy_name, order_remark)，此前只传 7 个，
+                # 本地 id 落在了 strategy_name 位，order_remark 恒空，
+                # 成交回报的 remark 一级关联永远失效。
             )
             if result is None or getattr(result, "error_id", -1) != 0:
                 err = getattr(result, "error_msg", "未知错误")

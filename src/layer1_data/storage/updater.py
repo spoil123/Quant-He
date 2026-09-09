@@ -516,6 +516,47 @@ def init_all(codes: Optional[List[str]] = None, start_date: str | None = None,
     return result
 
 
+def reconcile_daily_basic(lookback_days: int = 30) -> Dict[str, int]:
+    """对账补抓 daily_basic 缺口（2026-09-09，第三轮审计 M5）。
+
+    daily_basic 增量只写 > last_date 的行，源接口偶发漏返回时该行永久
+    缺失且无自愈路径 —— SQL 实测每日 12-20 只「有价无 basic」（含 300760
+    等正常交易大盘股），估值因子（pe/pb/换手）随之静默缺口。
+
+    做法：找近 lookback_days 个自然日内「有价无 basic」的股票，全量重抓
+    其 basic（fetch_stock_full 派生），save 走 insert_ignore —— 已有行不动、
+    缺失行补齐，天然幂等。
+    """
+    since = f"(NOW() - INTERVAL {int(lookback_days)} DAY)"
+    df = read_sql(
+        "SELECT DISTINCT p.ts_code FROM daily_price p "
+        "LEFT JOIN daily_basic b ON b.ts_code = p.ts_code "
+        "AND b.trade_date = p.trade_date "
+        f"WHERE p.trade_date >= {since} AND b.ts_code IS NULL"
+    )
+    codes = sorted(df["ts_code"].astype(str).tolist()) if not df.empty else []
+    if not codes:
+        logger.info("daily_basic 对账：无缺口")
+        return {"codes": 0, "rows": 0}
+
+    from src.layer1_data.fetcher.daily_price import fetch_stock_full
+    total = 0
+    for code in codes:
+        try:
+            _, basic = fetch_stock_full(code)
+            if basic is None or basic.empty:
+                continue
+            n = repo.save_daily_basic(basic)
+            total += n
+            if n:
+                logger.info(f"daily_basic 对账补抓 {code}: 补 {n} 行")
+        except Exception as e:                            # noqa: BLE001
+            logger.warning(f"daily_basic 对账补抓 {code} 失败: "
+                           f"{type(e).__name__}: {e}")
+    logger.info(f"daily_basic 对账完成：{len(codes)} 只涉事，补 {total} 行")
+    return {"codes": len(codes), "rows": total}
+
+
 def update_all(codes: Optional[List[str]] = None, max_workers: int = 4) -> Dict:
     """日常增量更新。"""
     logger.info("=" * 70)
@@ -531,6 +572,8 @@ def update_all(codes: Optional[List[str]] = None, max_workers: int = 4) -> Dict:
         codes = repo.get_stock_codes()
 
     result["daily"] = update_daily_batch(codes, force_full=False, max_workers=max_workers)
+    # M5：basic 缺口对账补抓（源接口偶发漏返回的行由此自愈）
+    result["basic_reconcile"] = reconcile_daily_basic()
     # M5：财务走增量（已入库且含最新报告期的跳过），避免夜跑每次全量重抓
     result["financial"] = update_financial(codes, skip_existing=True)
     return result

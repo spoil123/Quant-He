@@ -53,8 +53,10 @@ CREATE TABLE IF NOT EXISTS `execution_trade` (
   `volume`        INT UNSIGNED  NOT NULL                COMMENT '成交数量（股）',
   `deal_amount`   DECIMAL(20,2)  DEFAULT NULL           COMMENT '成交金额 = deal_price × volume',
   `deal_time`     DATETIME     NOT NULL                 COMMENT '成交时间',
+  `broker_deal_id` VARCHAR(64) DEFAULT NULL             COMMENT '券商端成交编号(去重键)',
   `created_at`    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_broker_deal` (`broker`, `broker_deal_id`),
   KEY `idx_order` (`order_id`),
   KEY `idx_code_time` (`ts_code`, `deal_time`),
   CONSTRAINT `fk_trade_order` FOREIGN KEY (`order_id`) REFERENCES `execution_order` (`id`)

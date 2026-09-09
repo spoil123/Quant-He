@@ -52,7 +52,9 @@ def load_trade_days() -> set:
     """
     global _TRADE_DAYS, _TRADE_DAYS_FOR
     today = datetime.now().strftime("%Y-%m-%d")
-    if _TRADE_DAYS_FOR == today and _TRADE_DAYS:
+    # 按「天」缓存：成功/降级/过期三条路径都置 _TRADE_DAYS_FOR，避免
+    # daemon 主循环每秒重查 DB（空集也缓存 —— 2026-09-09 第三轮审计 L3）
+    if _TRADE_DAYS_FOR == today:
         return _TRADE_DAYS
     try:
         from src.common.db import read_sql
@@ -71,6 +73,9 @@ def load_trade_days() -> set:
     except Exception as e:                                # noqa: BLE001
         logger.warning(f"读取交易日历失败（交易日判断降级为不拦截）: "
                        f"{type(e).__name__}: {e}")
+    # 降级结果也按天缓存（2026-09-09，第三轮审计 L3）：否则 daemon 主循环
+    # 每轮都重查一次 DB（DB 挂掉时是每秒一次的无效重试）
+    _TRADE_DAYS, _TRADE_DAYS_FOR = set(), today
     return set()
 
 
@@ -172,10 +177,15 @@ class Scheduler:
                 if last_run.get(name) == key:
                     continue
                 fut = futures.get(name)
-                if fut is not None and not fut.done():
-                    # 上一轮任务还没跑完，跳过本轮，防重复触发
-                    logger.warning(f"任务 {name} 仍在运行中，跳过本轮触发")
-                    continue
+                if fut is not None:
+                    if fut.done():
+                        # 完成的 future 及时移除（2026-09-09，第三轮审计 L3）：
+                        # 字典只增不删，daemon 长跑下 done future 永久驻留
+                        futures.pop(name, None)
+                    else:
+                        # 上一轮任务还没跑完，跳过本轮，防重复触发
+                        logger.warning(f"任务 {name} 仍在运行中，跳过本轮触发")
+                        continue
                 last_run[name] = key
                 logger.info(f"触发定时任务: {name}")
 

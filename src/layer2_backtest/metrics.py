@@ -33,8 +33,24 @@ def to_series(nav) -> pd.Series:
     else:
         s = pd.Series(nav)
     s.index = pd.to_datetime(s.index)
-    s = pd.to_numeric(s, errors="coerce").dropna()
-    return s.sort_index()
+    s = pd.to_numeric(s, errors="coerce")
+    n_raw = len(s)
+    s = s.dropna().sort_index()
+    # 中段 NaN 静默剔除会缩短年化窗口、歪曲回撤路径（2026-09-09，第三轮
+    # 审计 L4）。首尾 NaN 属正常截断（剔除后首尾区间收缩）；落在保留区间
+    # 之内的 NaN 才是"中段缺失"，必须暴露而不是静默吞掉。
+    if len(s) and len(s) < n_raw:
+        kept_min, kept_max = s.index.min(), s.index.max()
+        raw = pd.to_numeric(pd.Series(nav), errors="coerce")
+        raw.index = pd.to_datetime(raw.index)
+        window = raw[(raw.index >= kept_min) & (raw.index <= kept_max)]
+        n_mid_nan = int(window.isna().sum())
+        if n_mid_nan:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"to_series: 净值序列中段有 {n_mid_nan} 个 NaN 被剔除，"
+                f"年化/回撤口径可能失真，请检查上游数据")
+    return s
 
 
 def total_return(nav: pd.Series) -> float:
