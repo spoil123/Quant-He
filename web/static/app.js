@@ -439,9 +439,27 @@ const app = createApp({
         loadWorkbench(), loadComboResults(),
       ];
       jobs.forEach(p => p && p.catch && p.catch(() => {}));
+      // 桌面无边框壳：pywebview 注入完成后显示窗口控制按钮
+      window.addEventListener('pywebviewready', () => {
+        document.documentElement.classList.add('in-wv');
+      });
+      if (window.pywebview) document.documentElement.classList.add('in-wv');
     });
 
+    const winMaxed = Vue.ref(false);
+    function winOp(op) {
+      const api = window.pywebview && window.pywebview.api;
+      if (!api) return;
+      if (op === 'min') api.min_win();
+      else if (op === 'close') api.close_win();
+      else if (op === 'max') {
+        const m = !winMaxed.value; winMaxed.value = m;
+        m ? api.max_win() : api.restore_win();
+      }
+    }
+
     return { tab, pageTitle, ovTag, ovRuns, ovMetrics, ovEquity, ovCombo, comboMembers,
+      winMaxed, winOp,
       btList, btDetail, icTable, icSeries, quantile, ftag,
       riskReport, riskEvents, rtag, mon, running, riskParm, num, pct, isPct, isLoss, fmtVal, fmtCell, fmtMetric,
       fc, pool, wbSel, wbWeight, wbSelected, wbToggle, wbTouch, wbNormPct, wbEqual,

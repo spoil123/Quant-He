@@ -62,7 +62,13 @@ body { background:var(--bg); color:var(--text); font-family:var(--sans); font-si
         padding:0 12px 20px; position:sticky; top:0; height:100vh; z-index:2;
         display:flex; flex-direction:column; }
 .main { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; z-index:1; }
-.topbar { display:flex; align-items:center; gap:16px; padding:0 30px; height:64px; }
+.topbar { display:flex; align-items:center; gap:16px; padding:0 104px 0 30px; height:64px; }
+.win-ctrl { position:fixed; top:0; right:0; z-index:60; display:none; }
+html.in-wv .win-ctrl { display:flex; }
+.win-ctrl a { width:46px; height:34px; display:flex; align-items:center; justify-content:center;
+              color:var(--muted); cursor:pointer; font-size:12px; transition:background .12s,color .12s; }
+.win-ctrl a:hover { background:rgba(148,163,184,.14); color:var(--text); }
+.win-ctrl a.close:hover { background:#d5424c; color:#fff; }
 .content { padding:18px 30px 36px; max-width:1320px; width:100%; }
 
 /* ===== 侧边栏 ===== */
@@ -220,21 +226,27 @@ input:focus,select:focus { outline:none; border-color:var(--accent);
 <div class="aurora" aria-hidden="true"><i></i></div>
 <div class="grid-fx" aria-hidden="true"></div>
 <div id="app">
+  <!-- 无边框窗口控制按钮（仅桌面壳内显示） -->
+  <div class="win-ctrl">
+    <a @click="winOp('min')" title="最小化">─</a>
+    <a @click="winOp('max')" :title="winMaxed ? '还原' : '最大化'">{{ winMaxed ? '❐' : '▢' }}</a>
+    <a class="close" @click="winOp('close')" title="关闭">✕</a>
+  </div>
   <!-- ===== 侧边栏 ===== -->
   <aside class="side">
-    <div class="brand"><em>Quant·He</em> 量化工作台
-      <small>Factor Lab · Desktop</small></div>
+    <div class="brand pywebview-drag-region"><span><em>Quant·He</em> 量化工作台</span>
+      <small>FACTOR LAB · DESKTOP</small></div>
     <a class="nav-item" :class="{on:tab==='overview'}" @click="tab='overview'"><span class="ico">◈</span>总览</a>
     <a class="nav-item" :class="{on:tab==='workbench'}" @click="tab='workbench'"><span class="ico">⬡</span>因子工作台</a>
     <a class="nav-item" :class="{on:tab==='combo'}" @click="tab='combo'"><span class="ico">⊞</span>配方组合</a>
     <a class="nav-item" :class="{on:tab==='backtest'}" @click="tab='backtest'"><span class="ico">≡</span>回测记录</a>
     <a class="nav-item" :class="{on:tab==='factors'}" @click="tab='factors'"><span class="ico">∿</span>因子检验</a>
     <a class="nav-item" :class="{on:tab==='risk'}" @click="tab='risk'"><span class="ico">⛨</span>风控与监控</a>
-    <div class="side-foot">v2.0 · 本机<br>面板缓存 2021–2025 · 无需数据库</div>
+    <div class="side-foot">v2.1 · 本机<br>面板缓存 2021–2025 · 无需数据库</div>
   </aside>
 
   <div class="main">
-    <header class="topbar">
+    <header class="topbar pywebview-drag-region">
       <h1>{{pageTitle}}</h1>
       <div class="baseline">报告基线 Combo3 ｜ 年化 <b>15.21%</b> · 夏普 <b>1.005</b> · 回撤 <b>11.51%</b></div>
     </header>

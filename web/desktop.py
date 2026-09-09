@@ -73,6 +73,27 @@ def _log(msg: str) -> None:
         pass
 
 
+class WinApi:
+    """提供给前端 JS 的窗口控制（无边框模式下替代原生标题栏按钮）。"""
+
+    @staticmethod
+    def _w():
+        import webview
+        return webview.windows[0]
+
+    def min_win(self) -> None:
+        self._w().minimize()
+
+    def max_win(self) -> None:
+        self._w().maximize()
+
+    def restore_win(self) -> None:
+        self._w().restore()
+
+    def close_win(self) -> None:
+        self._w().destroy()
+
+
 def main() -> None:
     _log(f"QuantDesktop 启动  python={getattr(sys, 'frozen', False)}  port={PORT}")
     try:
@@ -85,12 +106,15 @@ def main() -> None:
 
         import webview
 
-        _log("创建原生窗口 (WebView2)...")
+        _log("创建原生窗口 (WebView2, 无边框)...")
         webview.create_window(
             "Quant·He 因子工作台",
             f"http://{HOST}:{PORT}",
             width=1280, height=820,
             min_size=(1024, 700),
+            frameless=True,            # 去掉原生标题栏，消除与页面的割裂
+            easy_drag=False,           # 拖拽由页面内 pywebview-drag-region 接管
+            js_api=WinApi(),
         )
         webview.start()
         _log("窗口已关闭")
