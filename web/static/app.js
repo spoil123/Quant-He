@@ -57,7 +57,7 @@ const app = createApp({
                            textStyle: { color: '#e9edf4', fontSize: 12 } };
     function lineOption(x, series) {
       return { tooltip: { trigger: 'axis', ...tooltipStyle },
-               legend: series.length > 1 ? { textStyle: { color: '#8b96a8' } } : undefined,
+               legend: series.length > 1 ? { textStyle: { color: '#94a0b4' } } : undefined,
                grid: { left: 56, right: 20, top: 30, bottom: 32 },
                xAxis: { type: 'category', data: x, ...axisStyle },
                yAxis: { type: 'value', ...axisStyle }, series };
@@ -126,7 +126,7 @@ const app = createApp({
       if (quantile.value.length) {
         const factors = [...new Set(quantile.value.map(r => r.factor))];
         chart('qrChart', {
-          tooltip: { ...tooltipStyle }, legend: { textStyle: { color: '#8b96a8' } },
+          tooltip: { ...tooltipStyle }, legend: { textStyle: { color: '#94a0b4' } },
           grid: { left: 56, right: 20, top: 30, bottom: 32 },
           xAxis: { type: 'category', data: ['1', '2', '3', '4', '5'], ...axisStyle },
           yAxis: { type: 'value', ...axisStyle },
@@ -152,7 +152,7 @@ const app = createApp({
       await nextTick();
       if (p.length && r.length) {
         chart('riskChart', lineOption(p.map(x => x.trade_date), [
-          equitySeries('无风控', p, '#e2554f', 1.6),
+          equitySeries('无风控', p, '#f05d56', 1.6),
           equitySeries('有风控', r, '#38bdf8')]));
       }
     }
@@ -423,7 +423,7 @@ const app = createApp({
     function drawCbChart() {
       const e = cbRes.value.equity;
       if (e && e.length) chart('cbChart', lineOption(e.map(r => r.trade_date),
-        [equitySeries('净值', e, '#2dd4bf')]));
+        [equitySeries('净值', e, '#22d3ee')]));
     }
     function drawRcChart() {
       const e = cbRes.value.equity;
