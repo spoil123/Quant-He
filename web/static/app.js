@@ -50,9 +50,11 @@ const app = createApp({
       charts[id].setOption(option, true);
       charts[id].resize();
     }
-    const axisStyle = { axisLabel: { color: '#8b96a8' }, splitLine: { lineStyle: { color: '#1a2230' } } };
-    const tooltipStyle = { backgroundColor: '#151b26', borderColor: '#2c3949',
-                           textStyle: { color: '#e8ecf2', fontSize: 12 } };
+    const axisStyle = { axisLabel: { color: '#94a0b4', formatter: v => Math.abs(v) >= 10000 ? (v / 10000) + '万' : v },
+                        axisLine: { lineStyle: { color: 'rgba(148,163,184,.16)' } },
+                        splitLine: { lineStyle: { color: 'rgba(148,163,184,.09)' } } };
+    const tooltipStyle = { backgroundColor: 'rgba(14,19,29,.95)', borderColor: 'rgba(148,163,184,.28)',
+                           textStyle: { color: '#e9edf4', fontSize: 12 } };
     function lineOption(x, series) {
       return { tooltip: { trigger: 'axis', ...tooltipStyle },
                legend: series.length > 1 ? { textStyle: { color: '#8b96a8' } } : undefined,
@@ -92,7 +94,7 @@ const app = createApp({
       await nextTick();
       chart('ovChart', lineOption(
         ovEquity.value.map(r => r.trade_date),
-        [equitySeries((ovCombo.value.name || '组合') + ' 净值', ovEquity.value, '#e2554f')]));
+        [equitySeries((ovCombo.value.name || '组合') + ' 净值', ovEquity.value, '#f05d56')]));
     }
 
     async function loadBacktest(tag) {

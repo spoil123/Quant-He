@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from web import api, runner
 
-app = FastAPI(title="量化交易系统", version="1.7")
+app = FastAPI(title="量化交易系统", version="1.8")
 
 STATIC = ROOT / "web" / "static"
 
