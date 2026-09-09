@@ -46,6 +46,11 @@ const app = createApp({
     function chart(id, option) {
       const el = document.getElementById(id);
       if (!el) return;
+      // tab 的 v-if 会重建 DOM：旧实例绑在已脱离文档的节点上，setOption 会画进孤儿节点（图表空白）
+      if (charts[id] && !charts[id].isDisposed() && charts[id].getDom() !== el) {
+        charts[id].dispose();
+        charts[id] = null;
+      }
       if (!charts[id] || charts[id].isDisposed()) charts[id] = echarts.init(el);
       charts[id].setOption(option, true);
       charts[id].resize();
@@ -439,6 +444,9 @@ const app = createApp({
         loadWorkbench(), loadComboResults(),
       ];
       jobs.forEach(p => p && p.catch && p.catch(() => {}));
+      // 窗口尺寸变化时所有存活图表跟随重排
+      window.addEventListener('resize', () =>
+        Object.values(charts).forEach(c => c && !c.isDisposed() && c.resize()));
       // 桌面无边框壳：pywebview 注入完成后显示窗口控制按钮
       window.addEventListener('pywebviewready', () => {
         document.documentElement.classList.add('in-wv');

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +29,27 @@ try:
     COMBO_YAML = CONFIG_DIR / "combo.yaml"
 except Exception:                                          # noqa: BLE001
     COMBO_YAML = CONFIG_DIR / "combo.yaml"
+
+# combo.yaml 读-改-写临界区：save_combo_config / save_custom_factors 并发时防丢失更新
+COMBO_LOCK = threading.Lock()
+
+
+def _persist_combo(raw: dict) -> str | None:
+    """备份 + 原子写回 combo.yaml（tmp+replace，写一半崩溃不会截断原文件）。
+    返回错误信息，None=成功。调用方必须持有 COMBO_LOCK。"""
+    from datetime import datetime as _dt
+    bak = CONFIG_DIR / f"combo.yaml.bak_{_dt.now():%Y%m%d_%H%M%S}"
+    try:
+        import shutil as _shutil
+        if COMBO_YAML.exists():
+            _shutil.copy2(COMBO_YAML, bak)
+        tmp = COMBO_YAML.with_suffix(".yaml.tmp")
+        tmp.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+                       encoding="utf-8")
+        tmp.replace(COMBO_YAML)
+    except Exception as e:                                 # noqa: BLE001
+        return f"写回失败（已备份到 {bak.name}）: {e}"
+    return None
 
 
 # ================================================================ 产物扫描
@@ -418,18 +440,10 @@ def save_custom_factors(payload: dict) -> dict:
                 blend.pop(k)
             combo["custom_blend"] = blend or None
 
-    from datetime import datetime as _dt
-    bak = CONFIG_DIR / f"combo.yaml.bak_{_dt.now():%Y%m%d_%H%M%S}"
-    try:
-        import shutil as _shutil
-        _shutil.copy2(COMBO_YAML, bak)
-        COMBO_YAML.write_text(
-            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-    except Exception as e:                                 # noqa: BLE001
-        return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
-    return {"ok": True, "backup": bak.name, "factors": clean}
+    err = _persist_combo(raw)
+    if err:
+        return {"error": err}
+    return {"ok": True, "factors": clean}
 
 
 def combo_config() -> dict:
@@ -550,18 +564,10 @@ def save_combo_config(payload: dict) -> dict:
         if str(period["start"]) >= str(period["end"]):
             return {"error": "period.start 必须早于 period.end"}
 
-    from datetime import datetime as _dt
-    bak = CONFIG_DIR / f"combo.yaml.bak_{_dt.now():%Y%m%d_%H%M%S}"
-    try:
-        import shutil as _shutil
-        _shutil.copy2(COMBO_YAML, bak)
-        COMBO_YAML.write_text(
-            yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-    except Exception as e:                                # noqa: BLE001
-        return {"error": f"写回失败（已备份到 {bak.name}）: {e}"}
-    return {"ok": True, "backup": bak.name, "config": combo_config()}
+    err = _persist_combo(raw)
+    if err:
+        return {"error": err}
+    return {"ok": True, "config": combo_config()}
 
 
 def _list_combo_tags() -> list:

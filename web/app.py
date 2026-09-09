@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from web import api, runner
 
-app = FastAPI(title="量化交易系统", version="2.1")
+app = FastAPI(title="量化交易系统", version="2.2")
 
 STATIC = ROOT / "web" / "static"
 
@@ -62,7 +62,8 @@ def get_combo_config():
 
 @app.put("/api/combo-config")
 def put_combo_config(payload: dict):
-    return api.save_combo_config(payload)
+    with api.COMBO_LOCK:                      # 读-改-写全程持锁，防与 custom-factors 并发覆盖
+        return api.save_combo_config(payload)
 
 
 @app.get("/api/factor-pool")
@@ -73,7 +74,8 @@ def get_factor_pool():
 @app.post("/api/custom-factors")
 def post_custom_factors(payload: dict):
     """全量保存用户自定义表达式因子（增/改/删都传整表）。"""
-    return api.save_custom_factors(payload)
+    with api.COMBO_LOCK:
+        return api.save_custom_factors(payload)
 
 
 @app.get("/api/combo-results")

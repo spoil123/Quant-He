@@ -59,6 +59,12 @@ def main() -> None:
     ap.add_argument("--final5", default="", help="override final5 目录（默认 paths 解析）")
     args = ap.parse_args()
 
+    # 闸门阈值为 0 会使 -abs(0)=0，"回撤<=0" 对任意亏损恒真 → 组合被清空（2026-09-09 审计 #3）
+    for _g, _v in (("stop", args.stop), ("trailing", args.trailing), ("fuse", args.fuse)):
+        if _v is not None and _v == 0:
+            sys.exit(f"--{_g} 不能为 0：0 阈值会让止损/熔断对所有持仓立即触发；"
+                     f"请填正数（如 0.25 表示 25% 回撤），不启用就别传该参数")
+
     final5 = Path(args.final5) if args.final5 else get_final5_dir()
     tag = args.tag or _latest_tag(final5)
     w_path = final5 / f"combo_weights_{tag}.csv"
