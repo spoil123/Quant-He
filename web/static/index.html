@@ -59,19 +59,19 @@ body { background:var(--bg); color:var(--text); font-family:var(--sans); font-si
 #app { display:flex; min-height:100vh; position:relative; }
 .side { width:212px; flex-shrink:0; border-right:1px solid var(--border);
         background:rgba(9,12,18,.72); backdrop-filter:blur(16px);
-        padding:20px 12px; position:sticky; top:0; height:100vh; z-index:2;
+        padding:0 12px 20px; position:sticky; top:0; height:100vh; z-index:2;
         display:flex; flex-direction:column; }
 .main { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; z-index:1; }
-.topbar { display:flex; align-items:baseline; gap:16px; padding:18px 30px 14px;
-          border-bottom:1px solid rgba(148,163,184,.08);
-          background:rgba(9,12,18,.5); backdrop-filter:blur(14px); }
+.topbar { display:flex; align-items:center; gap:16px; padding:0 30px; height:64px; }
 .content { padding:18px 30px 36px; max-width:1320px; width:100%; }
 
 /* ===== 侧边栏 ===== */
-.brand { font-weight:bold; font-size:16px; padding:2px 10px 20px; letter-spacing:.5px; }
+.brand { font-weight:bold; font-size:15px; letter-spacing:.3px; white-space:nowrap;
+         height:64px; display:flex; flex-direction:column; justify-content:center;
+         padding:0 12px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }
 .brand em { font-style:normal; background:var(--accent-grad); -webkit-background-clip:text;
             background-clip:text; color:transparent; filter:drop-shadow(0 0 14px rgba(34,211,238,.35)); }
-.brand small { display:block; color:var(--faint); font-size:11px; font-weight:normal; margin-top:3px;
+.brand small { display:block; color:var(--faint); font-size:11px; font-weight:normal; margin-top:1px;
                letter-spacing:.14em; text-transform:uppercase; }
 .nav-item { display:flex; align-items:center; gap:10px; padding:9px 13px; margin-bottom:3px;
             border-radius:10px; cursor:pointer; color:var(--muted); position:relative;
@@ -230,7 +230,7 @@ input:focus,select:focus { outline:none; border-color:var(--accent);
     <a class="nav-item" :class="{on:tab==='backtest'}" @click="tab='backtest'"><span class="ico">≡</span>回测记录</a>
     <a class="nav-item" :class="{on:tab==='factors'}" @click="tab='factors'"><span class="ico">∿</span>因子检验</a>
     <a class="nav-item" :class="{on:tab==='risk'}" @click="tab='risk'"><span class="ico">⛨</span>风控与监控</a>
-    <div class="side-foot">v1.9 · 本机<br>面板缓存 2021–2025 · 无需数据库</div>
+    <div class="side-foot">v2.0 · 本机<br>面板缓存 2021–2025 · 无需数据库</div>
   </aside>
 
   <div class="main">
